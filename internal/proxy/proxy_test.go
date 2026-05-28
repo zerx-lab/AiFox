@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -221,6 +222,160 @@ func TestStreamingResponseIsCaptured(t *testing.T) {
 	}
 	if !strings.Contains(entries[0].ResponseBody, "data: 2") {
 		t.Fatalf("captured response missing later chunk: %q", entries[0].ResponseBody)
+	}
+}
+
+// TestStreamingAnalysisAppearsBeforeEnd guards the live-conversation behavior:
+// the proxy must run llmparse on partial bodies during the stream so the UI's
+// timeline fills in token by token, not all at once at EOF.
+func TestStreamingAnalysisAppearsBeforeEnd(t *testing.T) {
+	gate := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f := w.(http.Flusher)
+		// Enough SSE to produce a non-trivial partial Analysis: message_start
+		// gives id/model, content_block_delta gives a streamed text block.
+		first := strings.Join([]string{
+			"event: message_start",
+			`data: {"type":"message_start","message":{"id":"msg_live","model":"claude-test","role":"assistant","usage":{"input_tokens":1}}}`,
+			"",
+			"event: content_block_start",
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			"",
+			"event: content_block_delta",
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+			"",
+			"",
+		}, "\n")
+		_, _ = io.WriteString(w, first)
+		f.Flush()
+		<-gate
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer upstream.Close()
+
+	st := store.New(4)
+	cfg := newConfig(t, config.Settings{UpstreamBaseURL: upstream.URL})
+	addr := startProxy(t, cfg, st)
+
+	sub, unsub := st.Subscribe()
+	defer unsub()
+
+	done := make(chan struct{})
+	go func() {
+		resp, err := http.Post(addr+"/v1/messages", "application/json",
+			strings.NewReader(`{"model":"claude-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+		close(done)
+	}()
+
+	// Wait for an Update event that carries a non-nil Analysis while the
+	// upstream is still blocked. The first Add fires before any chunk lands,
+	// so we must consume events until Analysis is populated.
+	var partial *store.Entry
+	deadline := time.After(2 * time.Second)
+loop:
+	for {
+		select {
+		case e := <-sub:
+			if e != nil && e.Analysis != nil {
+				partial = e
+				break loop
+			}
+		case <-deadline:
+			break loop
+		}
+	}
+	if partial == nil {
+		close(gate)
+		<-done
+		t.Fatalf("expected an Analysis update during stream, got none")
+	}
+	if !partial.EndedAt.IsZero() {
+		close(gate)
+		<-done
+		t.Fatalf("partial entry should not have EndedAt set yet, got %v", partial.EndedAt)
+	}
+
+	// Let the upstream finish so the goroutine can return cleanly.
+	close(gate)
+	<-done
+}
+
+// TestClientCancelDuringStreamIsNotAnError guards the "normal termination"
+// path: when the inbound client hangs up mid-stream (opencode pressing
+// Esc, chat window closed, parent process killed, etc.) the request
+// context cancels and `body.Read` returns context.Canceled. That is not a
+// proxy/upstream failure and must not surface as a red error banner in
+// the UI — we keep whatever was captured and leave Entry.Error empty.
+func TestClientCancelDuringStreamIsNotAnError(t *testing.T) {
+	upstreamDone := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f := w.(http.Flusher)
+		// Emit one chunk so the client has something to read, then block
+		// until the inbound request is cancelled. Once cancelled, RoundTrip
+		// closes the upstream connection and our handler returns.
+		_, _ = io.WriteString(w, "event: ping\ndata: 1\n\n")
+		f.Flush()
+		<-r.Context().Done()
+		close(upstreamDone)
+	}))
+	defer upstream.Close()
+
+	st := store.New(4)
+	cfg := newConfig(t, config.Settings{UpstreamBaseURL: upstream.URL})
+	addr := startProxy(t, cfg, st)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr+"/stream", nil)
+	if err != nil {
+		t.Fatalf("new req: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	// Read the first chunk so we know the stream is established, then
+	// cancel from the client side.
+	buf := make([]byte, 64)
+	if _, err := resp.Body.Read(buf); err != nil {
+		t.Fatalf("read first chunk: %v", err)
+	}
+	cancel()
+	_ = resp.Body.Close()
+
+	select {
+	case <-upstreamDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("upstream handler did not observe cancellation")
+	}
+
+	// Give the proxy a moment to finalize the entry after the goroutine
+	// servicing the cancelled request unwinds.
+	deadline := time.Now().Add(time.Second)
+	var entry *store.Entry
+	for time.Now().Before(deadline) {
+		entries := st.List()
+		if len(entries) == 1 && !entries[0].EndedAt.IsZero() {
+			entry = entries[0]
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if entry == nil {
+		t.Fatalf("entry was not finalized after client cancel")
+	}
+	if entry.Error != "" {
+		t.Fatalf("client cancel must not be recorded as an error, got %q", entry.Error)
+	}
+	if !strings.Contains(entry.ResponseBody, "data: 1") {
+		t.Fatalf("partial response should still be captured, got %q", entry.ResponseBody)
 	}
 }
 

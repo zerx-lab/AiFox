@@ -190,25 +190,34 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	copyHeaders(w.Header(), resp.Header, hopByHopHeaders)
 	w.WriteHeader(resp.StatusCode)
 
-	captureAndStream(w, resp.Body, entry.ID, p.store)
+	captureAndStream(r.Context(), w, resp.Body, entry.ID, p.store)
 
 	p.store.Update(entry.ID, func(e *store.Entry) {
 		e.EndedAt = time.Now()
 		e.DurationMillis = e.EndedAt.Sub(started).Milliseconds()
-		// Best-effort structured analysis. Runs on the final captured bodies
-		// so partial streams still get whatever the analyzer can extract.
-		analysis := llmparse.Analyze(llmparse.Input{
-			Method:          e.Method,
-			URL:             e.URL,
-			RequestBody:     e.RequestBody,
-			ResponseBody:    e.ResponseBody,
-			ResponseHeaders: lowerKeys(e.ResponseHeaders),
-			Streaming:       e.Streaming,
-		})
-		if analysis != nil {
-			e.Analysis = analysis
-		}
+		// Final pass overwrites whatever the in-stream analyses left behind,
+		// so the recorded entry ends up with a clean, complete view.
+		runAnalysis(e)
 	})
+}
+
+// runAnalysis re-parses the entry's current bodies and writes the structured
+// view back into e.Analysis. Safe to call repeatedly during a stream — the
+// analyzer is tolerant of partial SSE bodies and we always replace the prior
+// snapshot rather than merge. Cheap on small bodies; for large ones the
+// caller throttles by wall-clock time (see captureAndStream).
+func runAnalysis(e *store.Entry) {
+	analysis := llmparse.Analyze(llmparse.Input{
+		Method:          e.Method,
+		URL:             e.URL,
+		RequestBody:     e.RequestBody,
+		ResponseBody:    e.ResponseBody,
+		ResponseHeaders: lowerKeys(e.ResponseHeaders),
+		Streaming:       e.Streaming,
+	})
+	if analysis != nil {
+		e.Analysis = analysis
+	}
 }
 
 // lowerKeys returns a copy of h with lowercased keys, so analyzers can look
@@ -224,15 +233,36 @@ func lowerKeys(h map[string]string) map[string]string {
 	return out
 }
 
+// analyzeInterval throttles in-stream re-parses. Analyze is O(n) over the
+// captured response body, so re-running it on every 32 KiB chunk would be
+// quadratic for long transcripts. ~150 ms is fast enough that the UI looks
+// "live" (≈7 Hz, smoother than human reading speed) while keeping CPU
+// linear. The first chunk always triggers an analyze so the conversation
+// view appears immediately instead of after one interval of latency.
+const analyzeInterval = 150 * time.Millisecond
+
 // captureAndStream copies upstream into the client while appending to the
 // store entry's ResponseBody. Each ~32 KiB chunk triggers a flush + store
-// update so the UI sees streaming progress.
-func captureAndStream(w http.ResponseWriter, body io.Reader, entryID string, st *store.Store) {
+// update so the UI sees streaming progress. To make the conversation view
+// fill in live (not just the raw body), we also run llmparse.Analyze on a
+// throttled schedule and write the partial Analysis into the same update —
+// piggybacking on the existing SSE broadcast keeps it to one event per
+// chunk.
+//
+// ctx is the inbound request's context. When it is cancelled (the client
+// hung up — e.g. the user pressed Esc in opencode, or the chat window was
+// closed) both `w.Write` and `body.Read` start failing. That is a normal
+// termination, not an error: we record what we captured and return without
+// setting `Entry.Error`, so the UI shows the entry as a completed stream
+// instead of a red failure banner. Only genuine upstream/write failures
+// (those that occur while ctx is still live) are reported as errors.
+func captureAndStream(ctx context.Context, w http.ResponseWriter, body io.Reader, entryID string, st *store.Store) {
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
 	var captured bytes.Buffer
 	totalBytes := int64(0)
 	truncated := false
+	var lastAnalyzeAt time.Time // zero ⇒ "never", so the first chunk fires immediately
 
 	for {
 		n, err := body.Read(buf)
@@ -240,7 +270,9 @@ func captureAndStream(w http.ResponseWriter, body io.Reader, entryID string, st 
 			totalBytes += int64(n)
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				st.Update(entryID, func(e *store.Entry) {
-					e.Error = "write to client: " + werr.Error()
+					if !isClientAbort(ctx, werr) {
+						e.Error = "write to client: " + werr.Error()
+					}
 					e.ResponseBody = captured.String()
 					e.ResponseSize = totalBytes
 				})
@@ -259,13 +291,23 @@ func captureAndStream(w http.ResponseWriter, body io.Reader, entryID string, st 
 			default:
 				captured.Write(buf[:n])
 			}
-			// Periodic snapshot so the UI sees live progress.
+			now := time.Now()
+			shouldAnalyze := lastAnalyzeAt.IsZero() || now.Sub(lastAnalyzeAt) >= analyzeInterval
+			if shouldAnalyze {
+				lastAnalyzeAt = now
+			}
+			// Periodic snapshot so the UI sees live progress. We batch the
+			// optional Analyze into the same Update so each chunk produces at
+			// most one SSE broadcast.
 			snapshot := captured.String()
 			st.Update(entryID, func(e *store.Entry) {
 				e.ResponseBody = snapshot
 				e.ResponseSize = totalBytes
 				if truncated {
 					e.Truncated = true
+				}
+				if shouldAnalyze {
+					runAnalysis(e)
 				}
 			})
 		}
@@ -274,13 +316,34 @@ func captureAndStream(w http.ResponseWriter, body io.Reader, entryID string, st 
 		}
 		if err != nil {
 			st.Update(entryID, func(e *store.Entry) {
-				e.Error = "read upstream: " + err.Error()
+				if !isClientAbort(ctx, err) {
+					e.Error = "read upstream: " + err.Error()
+				}
 				e.ResponseBody = captured.String()
 				e.ResponseSize = totalBytes
 			})
 			return
 		}
 	}
+}
+
+// isClientAbort returns true when err is the result of the inbound client
+// disconnecting mid-stream (request context cancelled, or a low-level
+// "broken pipe" / "connection reset" while writing back). These are
+// expected terminations — they happen every time an LLM client (opencode,
+// Claude Desktop, etc.) cancels generation — and should not surface as
+// errors in the UI.
+func isClientAbort(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return false
 }
 
 func buildUpstreamURL(base string, incoming *url.URL) (*url.URL, error) {

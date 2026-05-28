@@ -27,9 +27,18 @@ export function fmtClock(iso: string): string {
   return d.toLocaleString();
 }
 
-export function isPending(entry: { endedAt?: string; statusCode?: number }): boolean {
+export function isPending(entry: {
+  endedAt?: string;
+  statusCode?: number;
+}): boolean {
+  // Go's zero `time.Time` marshals to "0001-01-01T00:00:00Z", whose epoch is a
+  // (large) negative number — truthy, so a naive `entry.endedAt ? …` check
+  // would treat freshly-created entries as already ended. Require a positive
+  // epoch (= post-1970, i.e. a real timestamp) before considering the entry
+  // finished. Without this the in-flight badge flickers "ERR" before the
+  // upstream headers (statusCode / streaming flag) arrive.
   const ended = entry.endedAt ? new Date(entry.endedAt).getTime() : 0;
-  return !ended && !entry.statusCode;
+  return ended <= 0 && !entry.statusCode;
 }
 
 export function statusKind(entry: {
