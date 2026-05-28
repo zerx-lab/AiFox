@@ -3,7 +3,7 @@
 
 export const en = {
   app: {
-    title: "ai-fox",
+    title: "AiFox",
     subtitle: "AI traffic debugger",
   },
   nav: {
@@ -35,7 +35,8 @@ export const en = {
   },
   sidebar: {
     empty: "No requests captured yet.",
-    emptyHint: "Point your AI client at the proxy URL above and send a request.",
+    emptyHint:
+      "Point your AI client at the proxy URL above and send a request.",
     filterPlaceholder: "Filter by path or status",
     clear: "Clear all",
     confirmClear: "Discard all captured traffic?",
@@ -125,6 +126,15 @@ export const en = {
     tokensPricingCacheCreate: "Cache write",
     tokensPricingInput: "Input",
     tokensPricingOutput: "Output",
+    tokensCalcTitle: "Cost breakdown",
+    tokensCalcEdit: "What-if",
+    tokensCalcCancel: "Done",
+    tokensCalcReset: "Reset to actual",
+    tokensCalcColCategory: "Category",
+    tokensCalcColTokens: "Tokens",
+    tokensCalcColRate: "Rate",
+    tokensCalcColCost: "Cost",
+    tokensCalcTotal: "Total",
   },
   timeline: {
     emptyTitle: "Pick a request",
@@ -142,9 +152,11 @@ export const en = {
     sectionAppearance: "Appearance",
     sectionRuntime: "Runtime",
     upstreamBaseUrl: "Upstream base URL",
-    upstreamBaseUrlHint: "Example: https://api.anthropic.com or https://api.openai.com/v1",
+    upstreamBaseUrlHint:
+      "Example: https://api.anthropic.com or https://api.openai.com/v1",
     upstreamApiKey: "API key",
-    upstreamApiKeyHint: "Forwarded as the preset's auth header; client-supplied auth is overwritten.",
+    upstreamApiKeyHint:
+      "Forwarded as the preset's auth header; client-supplied auth is overwritten.",
     authPreset: "Auth preset",
     authPresetHint:
       "Anthropic uses x-api-key + anthropic-version. OpenAI presets use Authorization: Bearer. Custom lets you define every header yourself.",
@@ -222,13 +234,16 @@ export const en = {
     resize: "Drag to resize",
     expand: "Expand",
     collapse: "Collapse",
+    scrollTop: "Scroll to top",
+    scrollBottom: "Scroll to bottom",
     consoleEmpty: "Console output appears here once requests are captured.",
     consoleStart: "→ {method} {url}",
     consoleAssistant: "← assistant {model} ({tokens}) in {duration}",
     consoleTool: "  ⤷ tool {name} → {status}",
     consoleHttpErr: "! HTTP {code}",
     varsEmpty: "Select a captured request to see its parameters.",
-    varsNoParsed: "No parsed parameters for this request (unsupported endpoint).",
+    varsNoParsed:
+      "No parsed parameters for this request (unsupported endpoint).",
     varsName: "name",
     varsType: "type",
     varsValue: "value",

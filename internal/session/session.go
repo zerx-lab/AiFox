@@ -216,6 +216,29 @@ func (a *Aggregator) SetName(id, name string) error {
 	return writeNames(path, snapshot)
 }
 
+// Clear discards every aggregated session and the persisted name map. The
+// underlying store is the source of truth for entries; the renderer is
+// expected to clear it separately (typically in the same DELETE handler).
+func (a *Aggregator) Clear() error {
+	a.mu.Lock()
+	a.sessions = make(map[string]*Summary)
+	a.bucket = make(map[string][]*Summary)
+	a.last = make(map[string][]llmparse.NormalizedMessage)
+	a.byEntry = make(map[string]string)
+	a.names = make(map[string]string)
+	path := a.namesPath
+	a.mu.Unlock()
+
+	go a.notify()
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // SessionOf returns the session id we assigned the given entry, or "" when
 // the entry wasn't part of any aggregated session.
 func (a *Aggregator) SessionOf(entryID string) string {

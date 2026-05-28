@@ -4,7 +4,7 @@ import type { Dictionary } from "../index";
 
 export const zhCN: Dictionary = {
   app: {
-    title: "ai-fox",
+    title: "AiFox",
     subtitle: "AI 流量调试器",
   },
   nav: {
@@ -125,12 +125,22 @@ export const zhCN: Dictionary = {
     tokensPricingCacheCreate: "缓存写",
     tokensPricingInput: "输入",
     tokensPricingOutput: "输出",
+    tokensCalcTitle: "成本计算",
+    tokensCalcEdit: "试算",
+    tokensCalcCancel: "完成",
+    tokensCalcReset: "恢复当前用量",
+    tokensCalcColCategory: "类别",
+    tokensCalcColTokens: "Token 数",
+    tokensCalcColRate: "单价",
+    tokensCalcColCost: "小计",
+    tokensCalcTotal: "合计",
   },
   timeline: {
     emptyTitle: "选一条请求",
     emptyHint:
       "从左侧选一条已抓取的请求，这里会展示它的结构化时间线。原始 headers / body 请看右侧面板。",
-    noStructuredView: "这条流量没有结构化视图，请在右侧的「请求 / 响应」标签查看原文。",
+    noStructuredView:
+      "这条流量没有结构化视图，请在右侧的「请求 / 响应」标签查看原文。",
   },
   settings: {
     title: "设置",
@@ -141,9 +151,11 @@ export const zhCN: Dictionary = {
     sectionAppearance: "外观",
     sectionRuntime: "运行",
     upstreamBaseUrl: "上游 base URL",
-    upstreamBaseUrlHint: "示例: https://api.anthropic.com 或 https://api.openai.com/v1",
+    upstreamBaseUrlHint:
+      "示例: https://api.anthropic.com 或 https://api.openai.com/v1",
     upstreamApiKey: "API key",
-    upstreamApiKeyHint: "会按预设注入到鉴权 header；客户端原有的鉴权头会被覆盖。",
+    upstreamApiKeyHint:
+      "会按预设注入到鉴权 header；客户端原有的鉴权头会被覆盖。",
     authPreset: "鉴权预设",
     authPresetHint:
       "Anthropic 走 x-api-key + anthropic-version；OpenAI 预设用 Authorization: Bearer；自定义可任意编辑全部 header。",
@@ -159,11 +171,13 @@ export const zhCN: Dictionary = {
     headerAdd: "新增 header",
     headerRemove: "删除",
     proxyEnabled: "代理监听",
-    proxyEnabledHint: "默认未连接 —— 需要在顶栏（或这里）手动点击连接才开始转发。",
+    proxyEnabledHint:
+      "默认未连接 —— 需要在顶栏（或这里）手动点击连接才开始转发。",
     proxyOn: "已连接",
     proxyOff: "未连接",
     proxyPort: "代理端口",
-    proxyPortHint: "固定的本地回环端口 (1-65535)。把 AI 客户端指向 http://127.0.0.1:<端口>。",
+    proxyPortHint:
+      "固定的本地回环端口 (1-65535)。把 AI 客户端指向 http://127.0.0.1:<端口>。",
     language: "语言",
     languageFollowOs: "跟随系统",
     theme: "主题",
@@ -219,6 +233,8 @@ export const zhCN: Dictionary = {
     resize: "拖动改变高度",
     expand: "展开",
     collapse: "折叠",
+    scrollTop: "滚动到顶部",
+    scrollBottom: "滚动到底部",
     consoleEmpty: "捕获到请求后会在这里看到事件日志。",
     consoleStart: "→ {method} {url}",
     consoleAssistant: "← assistant {model} ({tokens}) 耗时 {duration}",
@@ -258,8 +274,10 @@ export const zhCN: Dictionary = {
     unknownFields: "未识别的请求字段",
     unknownFieldsHint:
       "这些字段不在解析器认识的 Messages API 文档范围内，已按原样展示，方便排查新增/Beta 参数。",
-    unknownBlockHint: "这种 content block 类型解析器还不认识，下面是原始 JSON 供查看。",
-    unparseable: "当前请求没有结构化视图，请回到「请求 / 响应」标签查看原始 JSON。",
+    unknownBlockHint:
+      "这种 content block 类型解析器还不认识，下面是原始 JSON 供查看。",
+    unparseable:
+      "当前请求没有结构化视图，请回到「请求 / 响应」标签查看原始 JSON。",
     warningsTitle: "解析提示",
     stream: "流式",
     nonStream: "非流式",

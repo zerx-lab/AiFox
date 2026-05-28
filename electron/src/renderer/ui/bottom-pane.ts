@@ -51,8 +51,30 @@ export function renderBottomPane(): HTMLElement {
           : undefined,
       ),
       h("span.bottom-tabs-spacer"),
+      collapsed
+        ? null
+        : h(
+            "button.bottom-icon-btn",
+            {
+              onclick: () => scrollBottomBody("top"),
+              title: t("bottom.scrollTop"),
+              "aria-label": t("bottom.scrollTop"),
+            },
+            "↑",
+          ),
+      collapsed
+        ? null
+        : h(
+            "button.bottom-icon-btn",
+            {
+              onclick: () => scrollBottomBody("bottom"),
+              title: t("bottom.scrollBottom"),
+              "aria-label": t("bottom.scrollBottom"),
+            },
+            "↓",
+          ),
       h(
-        "button.bottom-collapse",
+        "button.bottom-icon-btn",
         {
           onclick: toggleBottomCollapsed,
           title: collapsed ? t("bottom.expand") : t("bottom.collapse"),
@@ -105,6 +127,17 @@ function problemCount(): number {
     if (e.error || e.statusCode >= 400) n += 1;
   }
   return n;
+}
+
+// Imperative scroll-jump from the header buttons. We touch the live DOM
+// directly rather than going through state because scroll position isn't
+// reactive — the re-render snapshot/restore in app.ts watches the same
+// element and will keep us pinned to the new position (bottom-stuck or
+// scrolled up to top) until the user scrolls.
+function scrollBottomBody(target: "top" | "bottom") {
+  const el = document.querySelector<HTMLElement>(".bottom-body");
+  if (!el) return;
+  el.scrollTop = target === "top" ? 0 : el.scrollHeight;
 }
 
 // ---- Resize ----------------------------------------------------------------

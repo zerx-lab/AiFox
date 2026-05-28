@@ -1125,6 +1125,7 @@ paths:
         - settings
   /v1/traffic:
     delete:
+      description: Wipes the in-memory ring buffer, the on-disk JSONL log, the session aggregator's persisted name map, and the active breakpoint set. Held requests are released as continue.
       operationId: clear-traffic
       responses:
         "204":
@@ -1135,7 +1136,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
-      summary: Discard every captured entry
+      summary: Discard every captured entry, session label, and breakpoint.
       tags:
         - traffic
     get:

@@ -21,6 +21,10 @@ type BreakpointController interface {
 	Add(Breakpoint) (Breakpoint, error)
 	Update(id string, enabled bool) error
 	Delete(id string)
+	// Clear removes every breakpoint and releases held requests. Wired into
+	// the global DELETE /v1/traffic handler so the debugging surface resets
+	// together with traffic and sessions.
+	Clear()
 	PausedSnapshot() []Paused
 	Continue(entryID string) error
 	Abort(entryID string) error

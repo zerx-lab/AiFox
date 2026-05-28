@@ -234,6 +234,10 @@ func (a breakpointAdapter) Delete(id string) {
 	a.r.Delete(id)
 }
 
+func (a breakpointAdapter) Clear() {
+	a.r.Clear()
+}
+
 func (a breakpointAdapter) PausedSnapshot() []api.Paused {
 	in := a.r.PausedSnapshot()
 	out := make([]api.Paused, len(in))

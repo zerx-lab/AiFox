@@ -37,20 +37,42 @@ const SCROLL_SELECTORS = [
   ".bottom-body",
 ] as const;
 
-function snapshotScrolls(root: HTMLElement): Record<string, number> {
-  const out: Record<string, number> = {};
+// Containers that behave like a log tail: if the user was already at the
+// bottom we re-stick to the bottom after the re-render so newly appended
+// content scrolls into view, instead of restoring the old (now mid-list)
+// scrollTop. Scrolling up cancels the stickiness automatically — the
+// snapshot below records the live position each frame.
+const STICKY_BOTTOM: ReadonlySet<string> = new Set([".bottom-body"]);
+const STICKY_THRESHOLD_PX = 4;
+
+interface ScrollSnap {
+  top: number;
+  atBottom: boolean;
+}
+
+function snapshotScrolls(root: HTMLElement): Record<string, ScrollSnap> {
+  const out: Record<string, ScrollSnap> = {};
   for (const sel of SCROLL_SELECTORS) {
     const el = root.querySelector(sel);
-    if (el) out[sel] = el.scrollTop;
+    if (!el) continue;
+    const atBottom =
+      STICKY_BOTTOM.has(sel) &&
+      el.scrollHeight - el.scrollTop - el.clientHeight <= STICKY_THRESHOLD_PX;
+    out[sel] = { top: el.scrollTop, atBottom };
   }
   return out;
 }
 
-function restoreScrolls(root: HTMLElement, scrolls: Record<string, number>) {
+function restoreScrolls(root: HTMLElement, scrolls: Record<string, ScrollSnap>) {
   for (const sel of SCROLL_SELECTORS) {
     const el = root.querySelector(sel);
-    const v = scrolls[sel];
-    if (el && v != null) el.scrollTop = v;
+    const snap = scrolls[sel];
+    if (!el || !snap) continue;
+    if (snap.atBottom) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      el.scrollTop = snap.top;
+    }
   }
 }
 

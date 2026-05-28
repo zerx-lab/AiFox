@@ -177,6 +177,31 @@ func (r *Registry) Update(id string, enabled bool) error {
 	return nil
 }
 
+// Clear removes every breakpoint and releases every held request as
+// "continue". Used by the global clear action in the API layer so the
+// debugging surface resets together with traffic and sessions.
+func (r *Registry) Clear() {
+	r.mu.Lock()
+	heldDecisions := make([]chan Decision, 0, len(r.held))
+	for _, h := range r.held {
+		heldDecisions = append(heldDecisions, h.decision)
+	}
+	r.breakpoints = make(map[string]*Breakpoint)
+	r.held = make(map[string]*heldRequest)
+	r.pausedByBp = make(map[string]string)
+	r.mu.Unlock()
+
+	// Drain held requests without holding r.mu: pushing to a buffered chan
+	// is non-blocking but we still avoid the nested lock.
+	for _, ch := range heldDecisions {
+		select {
+		case ch <- DecisionContinue:
+		default:
+		}
+	}
+	r.notify()
+}
+
 // Delete removes a breakpoint. Any request currently held by it is
 // implicitly continued.
 func (r *Registry) Delete(id string) {

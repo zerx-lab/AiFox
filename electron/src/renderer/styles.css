@@ -1472,7 +1472,8 @@ textarea {
 .bottom-tabs-spacer {
   flex: 1;
 }
-.bottom-collapse {
+.bottom-collapse,
+.bottom-icon-btn {
   background: transparent;
   border: 0;
   color: var(--fg-3);
@@ -1480,7 +1481,8 @@ textarea {
   height: 26px;
   cursor: pointer;
 }
-.bottom-collapse:hover {
+.bottom-collapse:hover,
+.bottom-icon-btn:hover {
   background: var(--bg-hover);
   color: var(--fg);
 }
@@ -2207,6 +2209,136 @@ textarea {
 }
 .tk-price.v-tool .tk-price-v {
   color: var(--tool);
+}
+
+/* Cost breakdown / what-if calculator. Mirrors .tk-pricing's framing so
+ * the two cards read as one unit. Inputs are styled to look like plain text
+ * when disabled and only show the editable affordance in what-if mode. */
+.tk-calc {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.tk-calc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.tk-calc-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.tk-calc-actions {
+  display: flex;
+  gap: 6px;
+}
+.tk-calc-toggle,
+.tk-calc-reset {
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-3);
+  cursor: pointer;
+  font-size: 10.5px;
+  font-family: inherit;
+}
+.tk-calc-toggle:hover,
+.tk-calc-reset:hover {
+  color: var(--fg);
+  border-color: var(--fg-3);
+}
+.tk-calc-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.tk-calc-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 0.9fr 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tk-calc-row:last-child {
+  border-bottom: 0;
+}
+.tk-calc-head-row {
+  padding-bottom: 6px;
+}
+.tk-calc-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tk-calc-col-h {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.tk-calc-cat {
+  color: var(--fg-3);
+}
+.tk-calc-num {
+  text-align: right;
+  color: var(--fg);
+}
+.tk-calc-rate {
+  text-align: right;
+  color: var(--fg-3);
+}
+.tk-calc-cost {
+  text-align: right;
+  color: var(--accent);
+}
+.tk-calc-input {
+  width: 100%;
+  padding: 2px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+.tk-calc-input:focus {
+  outline: 0;
+  border-color: var(--accent);
+}
+.tk-calc-input:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg);
+  -webkit-appearance: none;
+  -moz-appearance: textfield;
+  appearance: none;
+}
+.tk-calc-input::-webkit-outer-spin-button,
+.tk-calc-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.tk-calc-total-row {
+  padding-top: 8px;
+  font-weight: 600;
+}
+.tk-calc-total-lbl {
+  color: var(--fg);
+}
+.tk-calc-total-val {
+  text-align: right;
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* ===== Tools tab ===== */

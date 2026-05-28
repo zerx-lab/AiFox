@@ -214,12 +214,39 @@ export function setReplayOpen(open: boolean) {
 
 export function upsertEntry(next: TrafficEntry) {
   const idx = state.entries.findIndex((e) => e.id === next.id);
-  if (idx === -1) {
+  const isNew = idx === -1;
+
+  // Tail-follow: if the user is currently parked on the latest entry of a
+  // session, advance their selection when that session's tip moves. We
+  // snapshot the pre-update tip here because the session aggregator only
+  // assigns sessionId once the request body is parseable, so the *first*
+  // broadcast for a brand-new entry typically has sessionId="" — only the
+  // follow-up update carries the session id. Gating on `isNew` would miss
+  // that follow-up entirely.
+  const sid = next.sessionId;
+  const wasTailing =
+    !!sid &&
+    state.selectedId !== null &&
+    state.entries.find((e) => e.sessionId === sid)?.id === state.selectedId;
+
+  if (isNew) {
     state.entries.unshift(next);
   } else {
     state.entries[idx] = next;
   }
-  if (state.selectedId === null) state.selectedId = autoPickEntry(state.entries);
+
+  if (state.selectedId === null) {
+    state.selectedId = autoPickEntry(state.entries);
+  } else if (wasTailing && sid) {
+    const newLatestId =
+      state.entries.find((e) => e.sessionId === sid)?.id ?? null;
+    if (newLatestId && newLatestId !== state.selectedId) {
+      state.selectedId = newLatestId;
+      state.selection = { messageKey: null, toolUseId: null };
+      state.detailTab = "overview";
+      state.expandedMessages.clear();
+    }
+  }
   notify();
 }
 

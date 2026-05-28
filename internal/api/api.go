@@ -124,11 +124,14 @@ func Register(api huma.API, deps Deps) {
 		OperationID: "clear-traffic",
 		Method:      http.MethodDelete,
 		Path:        "/v1/traffic",
-		Summary:     "Discard every captured entry",
-		Tags:        []string{"traffic"},
+		Summary:     "Discard every captured entry, session label, and breakpoint.",
+		Description: "Wipes the in-memory ring buffer, the on-disk JSONL log, " +
+			"the session aggregator's persisted name map, and the active " +
+			"breakpoint set. Held requests are released as continue.",
+		Tags: []string{"traffic"},
 		// 204 keeps the response side trivially typed in the TS client.
 		DefaultStatus: http.StatusNoContent,
-	}, clearTrafficHandler(deps.Traffic))
+	}, clearTrafficHandler(deps.Traffic, deps.Sessions, deps.Breakpoints))
 
 	registerTrafficStream(api, deps.Traffic, deps.Sessions, deps.Breakpoints)
 	registerSessions(api, deps.Sessions)
@@ -405,9 +408,21 @@ func getTrafficHandler(st *store.Store) func(context.Context, *GetTrafficInput) 
 	}
 }
 
-func clearTrafficHandler(st *store.Store) func(context.Context, *struct{}) (*struct{}, error) {
+func clearTrafficHandler(st *store.Store, agg *session.Aggregator, bp BreakpointController) func(context.Context, *struct{}) (*struct{}, error) {
 	return func(_ context.Context, _ *struct{}) (*struct{}, error) {
+		// Order: traffic first (source of truth for entries), then sessions
+		// (their entryIds become stale once entries are gone), then
+		// breakpoints (independent, but resetting them together matches the
+		// "clear everything" UX the renderer offers).
 		st.Clear()
+		if agg != nil {
+			if err := agg.Clear(); err != nil {
+				return nil, huma.Error500InternalServerError("clear sessions: " + err.Error())
+			}
+		}
+		if bp != nil {
+			bp.Clear()
+		}
 		return nil, nil
 	}
 }

@@ -53,7 +53,14 @@ func runServer() error {
 	if err != nil {
 		return err
 	}
-	traffic := store.New(500)
+	// Persist finalized traffic alongside settings.json so the renderer's
+	// session list survives a restart. The file is recreated on demand
+	// (after a user-triggered clear) and lives at user-only 0600 perms.
+	trafficPath := filepath.Join(filepath.Dir(config.DefaultPath()), "traffic.jsonl")
+	traffic, err := store.NewPersistent(500, trafficPath)
+	if err != nil {
+		return fmt.Errorf("traffic store: %w", err)
+	}
 
 	ctrl, err := proxy.NewController(settings.Get().ProxyPort, settings, traffic)
 	if err != nil {

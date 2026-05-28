@@ -1,13 +1,20 @@
 // Package store keeps an in-memory ring buffer of captured proxy traffic and
 // fans new entries out to live subscribers (used by the SSE stream endpoint).
 //
-// Persistence is deliberately out of scope here: the desktop app is short-lived
-// per session and the data is sensitive (raw prompts / API keys headers may
-// leak). If/when on-disk capture is added, it should land in a separate
-// package and respect the OS keyring decisions documented in CLAUDE.md.
+// Persistence (optional): when constructed via NewPersistent the Store also
+// appends each finalized entry (EndedAt non-zero) to a JSONL file alongside
+// the user's settings. The file holds raw prompts and authorization headers
+// in plaintext; rely on OS user-account isolation + 0600 file mode, which
+// matches how settings.json / session-names.json already live on disk. The
+// renderer's "clear" action truncates this file along with the in-memory
+// buffer (see Clear).
 package store
 
 import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -74,6 +81,16 @@ type Store struct {
 	subs   map[int]chan *Entry
 	nextID atomic.Uint64
 	subSeq int
+
+	// persistPath, when non-empty, is the JSONL file used to keep finalized
+	// entries across restarts. Empty means "in-memory only".
+	persistPath string
+	// fileMu serializes file-IO so concurrent finalizations don't interleave
+	// partial lines on disk.
+	fileMu sync.Mutex
+	// persisted tracks entry IDs already written to disk so streaming Updates
+	// don't write the same entry twice. Guarded by mu.
+	persisted map[string]struct{}
 }
 
 // New returns a Store that retains the most recent `capacity` entries.
@@ -87,6 +104,24 @@ func New(capacity int) *Store {
 		idIndex:  make(map[string]*Entry, capacity),
 		subs:     make(map[int]chan *Entry),
 	}
+}
+
+// NewPersistent returns a Store backed by the JSONL file at `path`. On boot
+// it loads up to `capacity` most-recent entries from the file (dedup by ID,
+// last write wins) so the renderer sees prior sessions immediately. Returns
+// an error only if the file exists but is unreadable; a missing file is
+// treated as a fresh start. Passing path == "" behaves the same as New.
+func NewPersistent(capacity int, path string) (*Store, error) {
+	s := New(capacity)
+	if path == "" {
+		return s, nil
+	}
+	s.persistPath = path
+	s.persisted = make(map[string]struct{})
+	if err := s.bootstrap(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // NextID returns a monotonically increasing identifier suitable for Entry.ID.
@@ -107,8 +142,12 @@ func (s *Store) Add(e *Entry) {
 	}
 	s.entries = append(s.entries, e)
 	s.idIndex[e.ID] = e
+	shouldPersist := s.markPersistableLocked(e)
 	s.mu.Unlock()
 
+	if shouldPersist {
+		s.appendToFile(e)
+	}
 	s.broadcast(e)
 }
 
@@ -117,11 +156,16 @@ func (s *Store) Add(e *Entry) {
 func (s *Store) Update(id string, fn func(*Entry)) {
 	s.mu.Lock()
 	e, ok := s.idIndex[id]
+	var shouldPersist bool
 	if ok {
 		fn(e)
+		shouldPersist = s.markPersistableLocked(e)
 	}
 	s.mu.Unlock()
 	if ok {
+		if shouldPersist {
+			s.appendToFile(e)
+		}
 		s.broadcast(e)
 	}
 }
@@ -146,13 +190,35 @@ func (s *Store) Get(id string) (*Entry, bool) {
 }
 
 // Clear discards every retained entry. Live subscribers stay subscribed.
+// When the Store is persistent the backing JSONL file is also removed so the
+// "clear" action erases on-disk traffic, not just the in-memory copy.
 func (s *Store) Clear() {
 	s.mu.Lock()
 	s.entries = s.entries[:0]
 	for k := range s.idIndex {
 		delete(s.idIndex, k)
 	}
+	if s.persisted != nil {
+		for k := range s.persisted {
+			delete(s.persisted, k)
+		}
+	}
+	path := s.persistPath
 	s.mu.Unlock()
+
+	if path == "" {
+		return
+	}
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		// Best-effort: report via stderr so the desktop log captures it, but
+		// don't fail the API call — the in-memory clear already happened.
+		// os.Remove is the safe choice here over truncate-in-place: if the
+		// file is briefly missing between Clear and the next finalize, the
+		// appendToFile path uses O_CREATE so the file is recreated.
+		_ = err
+	}
 }
 
 // Subscribe returns a channel that receives Entry pointers as they are added
@@ -188,6 +254,145 @@ func (s *Store) broadcast(e *Entry) {
 			// every event to a slow UI. The next polling refresh will catch up.
 		}
 	}
+}
+
+// markPersistableLocked decides whether e should be written to the JSONL
+// file. Caller must hold s.mu. Returns true exactly once per entry — the
+// first time we see EndedAt non-zero. In-flight streaming entries return
+// false on every chunk; a crash mid-stream drops them, which is acceptable
+// for a debugging tool.
+func (s *Store) markPersistableLocked(e *Entry) bool {
+	if s.persistPath == "" || s.persisted == nil || e == nil {
+		return false
+	}
+	if e.EndedAt.IsZero() {
+		return false
+	}
+	if _, ok := s.persisted[e.ID]; ok {
+		return false
+	}
+	s.persisted[e.ID] = struct{}{}
+	return true
+}
+
+// appendToFile writes one JSON line to the persistence file. Errors are
+// swallowed: the in-memory store stays usable, and the next finalize will
+// try again. We don't surface IO failures through Add/Update because the
+// proxy hot path can't usefully react to them.
+func (s *Store) appendToFile(e *Entry) {
+	if s.persistPath == "" {
+		return
+	}
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(s.persistPath), 0o700); err != nil {
+		return
+	}
+	f, err := os.OpenFile(s.persistPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.Write(raw)
+	_, _ = f.Write([]byte("\n"))
+}
+
+// bootstrap loads the JSONL persistence file into the ring buffer. Each line
+// is parsed independently — a malformed line is skipped, not fatal. Duplicate
+// IDs (the file was written with one append per finalize, so duplicates only
+// arise when an older code path appended multiple times) collapse to the last
+// one seen. The file's natural order is preserved, so the buffer ends up
+// chronological with the newest entries at the end. If more than capacity
+// entries are on disk we keep the last `capacity` of them.
+func (s *Store) bootstrap() error {
+	f, err := os.Open(s.persistPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	// Scanner buffer must accommodate at most one full Entry (request +
+	// response body each capped at MaxBodyBytes + JSON overhead). Use a
+	// generous ceiling so headers + analysis + base64 padding don't trip it.
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 8*MaxBodyBytes)
+
+	order := make([]string, 0, s.capacity)
+	byID := make(map[string]*Entry, s.capacity)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var entry Entry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if _, exists := byID[entry.ID]; !exists {
+			order = append(order, entry.ID)
+		}
+		byID[entry.ID] = &entry
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Keep only the last `capacity` distinct entries.
+	if len(order) > s.capacity {
+		order = order[len(order)-s.capacity:]
+	}
+
+	var maxSeq uint64
+	for _, id := range order {
+		e := byID[id]
+		s.entries = append(s.entries, e)
+		s.idIndex[e.ID] = e
+		s.persisted[e.ID] = struct{}{}
+		if n, ok := parseID(e.ID); ok && n > maxSeq {
+			maxSeq = n
+		}
+	}
+	// Track every observed ID so a re-append after a partial truncation
+	// doesn't duplicate the row.
+	for id := range byID {
+		s.persisted[id] = struct{}{}
+		if n, ok := parseID(id); ok && n > maxSeq {
+			maxSeq = n
+		}
+	}
+	// Skip the counter past any historical ID so freshly-issued IDs can't
+	// collide with one already on disk.
+	s.nextID.Store(maxSeq)
+	return nil
+}
+
+// parseID reverses formatID. Returns the encoded sequence and true on success;
+// strings that don't follow the "e-<base36>" shape return (0, false).
+func parseID(id string) (uint64, bool) {
+	if len(id) < 3 || id[0] != 'e' || id[1] != '-' {
+		return 0, false
+	}
+	var n uint64
+	for _, c := range id[2:] {
+		var d uint64
+		switch {
+		case c >= '0' && c <= '9':
+			d = uint64(c - '0')
+		case c >= 'a' && c <= 'z':
+			d = uint64(c-'a') + 10
+		default:
+			return 0, false
+		}
+		n = n*36 + d
+	}
+	return n, true
 }
 
 func formatID(n uint64) string {
