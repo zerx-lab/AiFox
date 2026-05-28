@@ -680,6 +680,59 @@ textarea {
   border-color: rgba(121, 182, 230, 0.5);
 }
 
+/* horizontal turn navigator — only shown for multi-turn sessions */
+.tl-entry-bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  overflow-x: auto;
+}
+.tl-entry-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tl-entry-chip:hover {
+  color: var(--fg-2);
+  background: var(--bg-hover);
+}
+.tl-entry-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.tl-entry-chip.err {
+  border-color: rgba(239, 111, 108, 0.55);
+  color: var(--err);
+}
+.tl-entry-chip.streaming .tl-entry-chip-num::after {
+  content: " ●";
+  color: var(--accent);
+}
+.tl-entry-chip-num {
+  font-weight: 600;
+}
+.tl-entry-chip-time {
+  color: var(--fg-4);
+}
+.tl-entry-chip.active .tl-entry-chip-time {
+  color: var(--fg-3);
+}
+.tl-entry-chip-tok {
+  color: var(--fg-4);
+}
+
 .tl-body {
   flex: 1;
   overflow-y: auto;
@@ -928,13 +981,114 @@ textarea {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-3);
-  margin-left: auto;
 }
 .tl-card-body {
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+}
+.tl-card-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-4);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: 3px;
+  transition: color 0.12s, background 0.12s;
+}
+.tl-card-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-2);
+}
+/* Copy button — anchored to the card's top-right corner, identical
+ * positioning for every message regardless of which header elements are
+ * present (toggle / sub / etc.). Floating above the head so it never
+ * jostles other inline elements. */
+.tl-card-copy {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-4);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, background 0.12s, border-color 0.12s;
+}
+.tl-card:hover .tl-card-copy,
+.tl-card-copy:focus-visible {
+  opacity: 1;
+}
+.tl-card-copy:hover {
+  color: var(--fg);
+  background: var(--bg-elev-2);
+  border-color: var(--border);
+}
+.tl-card-copy.copied {
+  opacity: 1;
+  color: var(--ok);
+  border-color: rgba(111, 194, 138, 0.45);
+  background: var(--ok-soft);
+}
+.tl-card-copy.copied.err {
+  color: var(--err);
+  border-color: rgba(239, 111, 108, 0.45);
+  background: var(--err-soft);
+}
+/* Leave space in the header line so a long `sub` (e.g. stop_reason) does
+ * not slide under the floating copy button. */
+.tl-card-head {
+  padding-right: 30px;
+}
+/* Long cards collapse to a fixed visible height and fade the trailing
+ * content under a gradient so a single huge prompt doesn't dominate the
+ * scroll. The "show more" pill anchors the trailing edge. */
+.tl-card.collapsed {
+  padding-bottom: 0;
+}
+/* Both message bodies (.tl-card-body) and the tools catalog list
+ * (.tl-tools-list) collapse the same way when the parent card is in the
+ * collapsed state. */
+.tl-card.collapsed .tl-card-body,
+.tl-card.collapsed .tl-tools-list {
+  max-height: 120px;
+  overflow: hidden;
+  position: relative;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 48px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 48px), transparent);
+}
+.tl-card-expand {
+  align-self: center;
+  margin: -10px auto 8px;
+  padding: 2px 12px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--fg-3);
+  border-radius: 999px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.tl-card-expand:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
 }
 .tl-empty-block {
   color: var(--fg-4);
@@ -1207,6 +1361,40 @@ textarea {
   font-size: 10px;
   color: var(--fg-4);
 }
+.tree-group-rename {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-left: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-4);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
+}
+.tree-group-hdr:hover .tree-group-rename {
+  opacity: 1;
+}
+.tree-group-rename:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.tree-group-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  outline: none;
+}
 .tree-group.collapsed .tree-group-items {
   display: none;
 }
@@ -1465,6 +1653,42 @@ textarea {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-3);
+}
+
+/* session-level rollup panel above per-entry usage */
+.det-session {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.det-session-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.det-session-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.det-session-model {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--accent);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.det-session-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 6px;
 }
 
 /* usage panel inside detail Overview */
@@ -1732,21 +1956,92 @@ textarea {
   background: var(--bg-elev-2);
 }
 
-/* Heatmap */
-.heatmap {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.7;
-  background: var(--bg);
+/* Heatmap (chart variant: one horizontal bar per segment) */
+.heatmap-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: 10px;
+  background: var(--bg);
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  word-break: break-word;
 }
-.heatmap .tk {
-  display: inline;
-  padding: 0 1px;
-  border-radius: 2px;
+.hmrow {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+}
+.hmrow:hover {
+  background: var(--bg-hover);
+}
+.hmrow-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hmrow-track {
+  position: relative;
+  height: 10px;
+  background: var(--bg-elev-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.hmrow-fill {
+  height: 100%;
+  background: var(--fg-4);
+  border-radius: 3px;
+}
+.hmrow-fill.hit {
+  background: var(--ok);
+}
+.hmrow-fill.new {
+  background: var(--warn);
+}
+.hmrow-fill.passthrough {
+  background: var(--fg-4);
+  opacity: 0.55;
+}
+.hmrow-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+  min-width: 130px;
+  justify-content: flex-end;
+}
+.hmrow-tok {
+  color: var(--fg);
+  font-weight: 600;
+}
+.hmrow-pct {
+  color: var(--fg-3);
+}
+.hmrow-status {
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.hmrow-status.hit {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.hmrow-status.new {
+  color: var(--warn);
+  background: rgba(245, 160, 86, 0.12);
+}
+.hmrow-status.passthrough {
+  color: var(--fg-4);
+  background: var(--bg-elev-2);
 }
 
 /* Blame */
@@ -1851,6 +2146,67 @@ textarea {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-3);
+}
+.tk-pricing {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.tk-pricing-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.tk-pricing-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.tk-pricing-model {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--accent);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tk-pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 6px;
+}
+.tk-price {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+.tk-price-l {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.tk-price-v {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg);
+  margin-top: 2px;
+  font-weight: 600;
+}
+.tk-price.v-ok .tk-price-v {
+  color: var(--ok);
+}
+.tk-price.v-warn .tk-price-v {
+  color: var(--warn);
+}
+.tk-price.v-tool .tk-price-v {
+  color: var(--tool);
 }
 
 /* ===== Tools tab ===== */

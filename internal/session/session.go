@@ -17,6 +17,10 @@
 package session
 
 import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -26,7 +30,10 @@ import (
 
 // Summary is a per-session rollup the API surfaces to the renderer.
 type Summary struct {
-	ID            string    `json:"id"`
+	ID string `json:"id"`
+	// Name is a user-supplied label. Empty means "no custom name set";
+	// the renderer falls back to a time-based label in that case.
+	Name          string    `json:"name,omitempty"`
 	Fingerprint   string    `json:"fingerprint"`
 	Provider      string    `json:"provider"`
 	Model         string    `json:"model,omitempty"`
@@ -53,6 +60,12 @@ type Aggregator struct {
 	bucket   map[string][]*Summary                   // fingerprint -> ordered session list
 	last     map[string][]llmparse.NormalizedMessage // sessionID -> last seen messages, for prefix containment
 	byEntry  map[string]string                       // entryID -> sessionID
+	// names persists user-supplied labels keyed by fingerprint so they
+	// survive an app restart: the aggregator forgets sessions on shutdown,
+	// but next time the same conversation anchor shows up we re-apply the
+	// label.
+	names     map[string]string
+	namesPath string
 
 	subsMu sync.RWMutex
 	subSeq int
@@ -60,15 +73,21 @@ type Aggregator struct {
 }
 
 // New returns an Aggregator wired to st. Call Start to begin processing.
-func New(st *store.Store) *Aggregator {
-	return &Aggregator{
-		st:       st,
-		sessions: make(map[string]*Summary),
-		bucket:   make(map[string][]*Summary),
-		last:     make(map[string][]llmparse.NormalizedMessage),
-		byEntry:  make(map[string]string),
-		subs:     make(map[int]chan struct{}),
+// namesPath is an optional JSON file used to persist user-supplied session
+// labels across restarts; pass "" to keep names in-memory only.
+func New(st *store.Store, namesPath string) *Aggregator {
+	a := &Aggregator{
+		st:        st,
+		sessions:  make(map[string]*Summary),
+		bucket:    make(map[string][]*Summary),
+		last:      make(map[string][]llmparse.NormalizedMessage),
+		byEntry:   make(map[string]string),
+		names:     make(map[string]string),
+		namesPath: namesPath,
+		subs:      make(map[int]chan struct{}),
 	}
+	a.loadNames()
+	return a
 }
 
 // Start launches the goroutine that drains the store fan-out and updates
@@ -163,6 +182,40 @@ func (a *Aggregator) Get(id string) (*Summary, bool) {
 	return &clone, true
 }
 
+// ErrNotFound is returned by SetName when the given session id is unknown.
+var ErrNotFound = errors.New("session: not found")
+
+// SetName stores a user-supplied label for the session with the given id.
+// The name is also persisted by fingerprint so it survives a restart. An
+// empty name clears the label (and removes the fingerprint entry from the
+// names file).
+func (a *Aggregator) SetName(id, name string) error {
+	a.mu.Lock()
+	s, ok := a.sessions[id]
+	if !ok {
+		a.mu.Unlock()
+		return ErrNotFound
+	}
+	s.Name = name
+	fp := s.Fingerprint
+	if name == "" {
+		delete(a.names, fp)
+	} else {
+		a.names[fp] = name
+	}
+	snapshot := make(map[string]string, len(a.names))
+	for k, v := range a.names {
+		snapshot[k] = v
+	}
+	path := a.namesPath
+	a.mu.Unlock()
+	go a.notify()
+	if path == "" {
+		return nil
+	}
+	return writeNames(path, snapshot)
+}
+
 // SessionOf returns the session id we assigned the given entry, or "" when
 // the entry wasn't part of any aggregated session.
 func (a *Aggregator) SessionOf(entryID string) string {
@@ -206,6 +259,7 @@ func (a *Aggregator) consume(e *store.Entry) {
 	if match == nil {
 		match = &Summary{
 			ID:          newSessionID(),
+			Name:        a.names[fp],
 			Fingerprint: fp,
 			Provider:    norm.Provider,
 			Model:       norm.Model,
@@ -315,6 +369,42 @@ func normalizedOf(a *llmparse.Analysis) *llmparse.NormalizedRequest {
 		return nil
 	}
 	return a.Normalized
+}
+
+// loadNames reads the fingerprint->name map from disk. Missing file or
+// malformed JSON is treated as "no saved names" — we never want a bad file
+// to block boot.
+func (a *Aggregator) loadNames() {
+	if a.namesPath == "" {
+		return
+	}
+	raw, err := os.ReadFile(a.namesPath)
+	if err != nil {
+		return
+	}
+	var loaded map[string]string
+	if err := json.Unmarshal(raw, &loaded); err != nil {
+		return
+	}
+	for k, v := range loaded {
+		if v == "" {
+			continue
+		}
+		a.names[k] = v
+	}
+}
+
+func writeNames(path string, names map[string]string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(names, "", "  ")
+	if err != nil {
+		return err
+	}
+	// 0600: names are user data and live alongside settings.json which
+	// stores secrets — keep the file private to the current user.
+	return os.WriteFile(path, raw, 0o600)
 }
 
 var sessionSeq uint64

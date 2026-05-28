@@ -98,10 +98,10 @@ export function renderTokens(usage: AnthropicUsage | undefined, model?: string):
     h(
       "tbody",
       null,
-      tkRow("cache_read_input_tokens", cacheRead),
-      tkRow("cache_creation_input_tokens", cacheCreate),
-      tkRow("input_tokens (uncached)", uncachedInput),
-      tkRow("output_tokens", output),
+      tkRow("cache_read_input_tokens", t("detail.tokensRowCacheRead"), cacheRead),
+      tkRow("cache_creation_input_tokens", t("detail.tokensRowCacheCreate"), cacheCreate),
+      tkRow("input_tokens", t("detail.tokensRowInput"), uncachedInput),
+      tkRow("output_tokens", t("detail.tokensRowOutput"), output),
       h(
         "tr.total",
         null,
@@ -117,22 +117,47 @@ export function renderTokens(usage: AnthropicUsage | undefined, model?: string):
     stats,
     bar,
     table,
-    pricing
-      ? h(
-          "div.tk-pricing-note",
-          null,
-          t("detail.tokensPricingNote", {
-            model: model ?? "—",
-            cacheRead: priceLabel(pricing.cacheRead),
-            input: priceLabel(pricing.input),
-            output: priceLabel(pricing.output),
-          }),
-        )
-      : h(
-          "div.tk-pricing-note",
-          null,
-          t("detail.tokensNoPricing", { model: model ?? "—" }),
-        ),
+    renderPricing(model, pricing),
+  );
+}
+
+function renderPricing(
+  model: string | undefined,
+  pricing: Pricing | undefined,
+): HTMLElement {
+  if (!pricing) {
+    return h(
+      "div.tk-pricing-note",
+      null,
+      t("detail.tokensNoPricing", { model: model ?? "—" }),
+    );
+  }
+  return h(
+    "div.tk-pricing",
+    null,
+    h(
+      "div.tk-pricing-head",
+      null,
+      h("span.tk-pricing-label", null, t("detail.tokensPricingModel")),
+      h("span.tk-pricing-model", { title: model ?? "" }, model ?? "—"),
+    ),
+    h(
+      "div.tk-pricing-grid",
+      null,
+      pricingCell(t("detail.tokensPricingCacheRead"), priceLabel(pricing.cacheRead), "ok"),
+      pricingCell(t("detail.tokensPricingCacheCreate"), priceLabel(pricing.cacheCreate), "warn"),
+      pricingCell(t("detail.tokensPricingInput"), priceLabel(pricing.input)),
+      pricingCell(t("detail.tokensPricingOutput"), priceLabel(pricing.output), "tool"),
+    ),
+  );
+}
+
+function pricingCell(label: string, value: string, variant?: string): HTMLElement {
+  return h(
+    `div.tk-price${variant ? `.v-${variant}` : ""}`,
+    null,
+    h("div.tk-price-l", null, label),
+    h("div.tk-price-v", null, value),
   );
 }
 
@@ -145,8 +170,15 @@ function statCell(label: string, value: string, variant?: string): HTMLElement {
   );
 }
 
-function tkRow(label: string, value: number): HTMLElement {
-  return h("tr", null, h("td", null, label), h("td", null, value.toLocaleString()));
+function tkRow(rawKey: string, label: string, value: number): HTMLElement {
+  // Hover shows the raw Anthropic field name; the visible label is the
+  // localized description chosen by the active locale.
+  return h(
+    "tr",
+    null,
+    h("td", { title: rawKey }, label),
+    h("td", null, value.toLocaleString()),
+  );
 }
 
 function appendBarSlice(

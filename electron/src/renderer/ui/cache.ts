@@ -268,29 +268,56 @@ function renderSegmented(segments: Segment[]): HTMLElement {
 }
 
 // ---- View 2: heatmap -----------------------------------------------------
+//
+// Renders each segment as a horizontal bar — width scaled to the largest
+// segment so the relative weight of every block reads at a glance. This is
+// the "no-scrolling" alternative to the segmented / blame views: useful for
+// spotting which block is bloating the cache budget without paging through
+// the actual prompt text.
 
 function renderHeatmap(segments: Segment[]): HTMLElement {
-  const wrap = h("div.heatmap");
+  const wrap = h("div.heatmap-chart");
+  const total = segments.reduce((acc, s) => acc + s.tokens, 0) || 1;
+  const max = Math.max(1, ...segments.map((s) => s.tokens));
   for (const seg of segments) {
-    for (const tok of seg.text.split(/(\s+)/)) {
-      if (/^\s+$/.test(tok)) {
-        wrap.appendChild(document.createTextNode(tok));
-        continue;
-      }
-      const span = document.createElement("span");
-      span.className = "tk";
-      span.textContent = tok;
-      if (seg.status === "hit") {
-        const alpha = Math.min(0.55, 0.18 + seg.hits * 0.05);
-        span.style.background = `rgba(111,194,138,${alpha})`;
-      } else if (seg.status === "new") {
-        span.style.background = "rgba(245,160,86,0.16)";
-      }
-      wrap.appendChild(span);
-    }
-    wrap.appendChild(document.createElement("br"));
+    const pct = (seg.tokens / total) * 100;
+    const fillPct = (seg.tokens / max) * 100;
+    wrap.appendChild(
+      h(
+        "div.hmrow",
+        { title: seg.text || seg.label },
+        h("div.hmrow-label", null, seg.label),
+        h(
+          "div.hmrow-track",
+          null,
+          (() => {
+            const fill = h(`div.hmrow-fill.${seg.status}`);
+            fill.style.width = `${fillPct}%`;
+            return fill;
+          })(),
+        ),
+        h(
+          "div.hmrow-meta",
+          null,
+          h("span.hmrow-tok", null, seg.tokens.toLocaleString()),
+          h("span.hmrow-pct", null, `${pct.toFixed(pct < 1 ? 1 : 0)}%`),
+          h(`span.hmrow-status.${seg.status}`, null, heatmapStatusLabel(seg.status)),
+        ),
+      ),
+    );
   }
   return wrap;
+}
+
+function heatmapStatusLabel(status: Segment["status"]): string {
+  switch (status) {
+    case "hit":
+      return t("detail.cacheBadgeHit");
+    case "new":
+      return t("detail.cacheBadgeNew");
+    default:
+      return t("detail.cacheBadgePass");
+  }
 }
 
 // ---- View 3: blame -------------------------------------------------------

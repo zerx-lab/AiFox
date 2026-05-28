@@ -54,6 +54,10 @@ export interface AppState {
   entries: TrafficEntry[];
   sessions: SessionSummary[];
   selectedSessionId: string | null;
+  // The session whose label is currently being edited inline in the sidebar
+  // (null when no rename is in progress). Sidebar consumes this to swap the
+  // label span for an <input>.
+  renamingSessionId: string | null;
   selectedId: string | null;
   selection: Selection;
   detailTab: DetailTab;
@@ -65,6 +69,15 @@ export interface AppState {
   filter: string;
   filters: TrafficFilter;
   collapsedGroups: Set<string>;
+  // Sessions that the user has explicitly expanded in the sidebar. Default
+  // behaviour is "collapsed": the sidebar shows the session header only and
+  // entries are revealed on demand via the chevron.
+  expandedSessions: Set<string>;
+  // Timeline message cards the user has opened up. Keyed by `messageKey`
+  // (e.g. "sys", "tools", "req-2", "resp"). Cards start collapsed so a
+  // single long prompt does not blow out the scroll height of the center
+  // pane; the user expands the cards they actually want to read.
+  expandedMessages: Set<string>;
   replayOpen: boolean;
   breakpoints: Breakpoint[];
   pausedRequests: PausedRequest[];
@@ -81,6 +94,7 @@ const state: AppState = {
   entries: [],
   sessions: [],
   selectedSessionId: null,
+  renamingSessionId: null,
   selectedId: null,
   selection: { messageKey: null, toolUseId: null },
   detailTab: "overview",
@@ -92,6 +106,8 @@ const state: AppState = {
   filter: "",
   filters: { text: "", streaming: false, errors: false, model: "" },
   collapsedGroups: new Set<string>(),
+  expandedSessions: new Set<string>(),
+  expandedMessages: new Set<string>(),
   replayOpen: false,
   breakpoints: [],
   pausedRequests: [],
@@ -110,10 +126,12 @@ export function getState(): AppState {
 export function setState(patch: Partial<AppState>) {
   // Switching to a different entry resets timeline-local selection so the
   // right pane doesn't keep highlighting a tool_use that belongs to the
-  // previous request.
+  // previous request. Also reset per-card expansion since messageKey
+  // namespacing is per-entry.
   if (patch.selectedId !== undefined && patch.selectedId !== state.selectedId) {
     state.selection = { messageKey: null, toolUseId: null };
     state.detailTab = "overview";
+    state.expandedMessages.clear();
   }
   Object.assign(state, patch);
   notify();
@@ -167,6 +185,23 @@ export function toggleGroupCollapsed(key: string) {
   notify();
 }
 
+export function toggleSessionExpanded(id: string) {
+  if (state.expandedSessions.has(id)) state.expandedSessions.delete(id);
+  else state.expandedSessions.add(id);
+  notify();
+}
+
+export function setRenamingSession(id: string | null) {
+  state.renamingSessionId = id;
+  notify();
+}
+
+export function toggleMessageExpanded(messageKey: string) {
+  if (state.expandedMessages.has(messageKey)) state.expandedMessages.delete(messageKey);
+  else state.expandedMessages.add(messageKey);
+  notify();
+}
+
 export function setCenterView(view: CenterView) {
   state.centerView = view;
   notify();
@@ -213,6 +248,8 @@ export function clearEntries() {
   state.selectedId = null;
   state.selection = { messageKey: null, toolUseId: null };
   state.detailTab = "overview";
+  state.expandedSessions.clear();
+  state.expandedMessages.clear();
   notify();
 }
 

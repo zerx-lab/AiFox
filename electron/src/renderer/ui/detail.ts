@@ -13,6 +13,7 @@ import {
   getState,
   setDetailTab,
   type DetailTab,
+  type SessionSummary,
   type TrafficEntry,
 } from "./state";
 import { renderTokens } from "./tokens";
@@ -154,12 +155,14 @@ function overviewBody(entry: TrafficEntry): HTMLElement {
     analysis?.anthropic?.response?.model ||
     "—";
 
+  const sessionPanel = renderSessionOverview(entry);
   const usagePanel = usage ? renderUsage(usage) : null;
 
   return h(
     "div",
     null,
     banners,
+    sessionPanel,
     usagePanel,
     h(
       "dl.kv",
@@ -175,6 +178,66 @@ function overviewBody(entry: TrafficEntry): HTMLElement {
       kv(t("detail.streaming"), entry.streaming ? "✓" : "—"),
     ),
   );
+}
+
+// Session-level rollup shown above the per-entry usage panel. Pulls token
+// totals from the SessionSummary the Go aggregator produced — that's the
+// source of truth for "across all turns of this conversation".
+function renderSessionOverview(entry: TrafficEntry): HTMLElement | null {
+  const state = getState();
+  const session = state.sessions.find((s) => (s.entryIds ?? []).includes(entry.id));
+  if (!session) return null;
+  const turns = session.entryIds?.length ?? 0;
+  const input = session.inputTokens ?? 0;
+  const cacheRead = session.cacheRead ?? 0;
+  const cacheCreate = session.cacheCreate ?? 0;
+  const output = session.outputTokens ?? 0;
+  const inputAll = input + cacheRead + cacheCreate;
+  const hitPct = inputAll > 0 ? Math.round((cacheRead / inputAll) * 100) : 0;
+
+  const cells = [
+    sessionCell(t("detail.sessionTurns"), String(turns)),
+    sessionCell(t("detail.sessionInput"), inputAll.toLocaleString()),
+    sessionCell(t("detail.sessionOutput"), output.toLocaleString(), "tool"),
+  ];
+  if (cacheRead > 0) {
+    cells.push(sessionCell(t("detail.sessionCacheRead"), cacheRead.toLocaleString(), "ok"));
+  }
+  if (cacheCreate > 0) {
+    cells.push(sessionCell(t("detail.sessionCacheCreate"), cacheCreate.toLocaleString(), "warn"));
+  }
+  cells.push(
+    sessionCell(t("detail.sessionHitRate"), `${hitPct}%`, cacheRead > 0 ? "ok" : undefined),
+  );
+
+  return h(
+    "div.det-session",
+    null,
+    h(
+      "div.det-session-head",
+      null,
+      h("span.det-session-title", null, t("detail.sessionTitle")),
+      h(
+        "span.det-session-model",
+        null,
+        sessionLabel(session),
+      ),
+    ),
+    h("div.det-session-stats", null, ...cells),
+  );
+}
+
+function sessionCell(label: string, value: string, variant?: string): HTMLElement {
+  return h(
+    `div.cstat${variant ? `.v-${variant}` : ""}`,
+    null,
+    h("div.l", null, label),
+    h("div.v", null, value),
+  );
+}
+
+function sessionLabel(s: SessionSummary): string {
+  return s.model || s.provider || s.id;
 }
 
 function renderUsage(u: AnthropicUsage): HTMLElement {

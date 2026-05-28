@@ -10,7 +10,7 @@ import type { components } from "../../api/client";
 import { t } from "../i18n";
 import { renderCallStack } from "./callstack";
 import { h } from "./dom";
-import { fmtDuration } from "./format";
+import { fmtDuration, fmtTime, statusKind } from "./format";
 import { highlight } from "./highlight";
 import { renderReplayPopover } from "./replay";
 import {
@@ -19,6 +19,8 @@ import {
   selectMessage,
   selectToolUse,
   setCenterView,
+  setState,
+  toggleMessageExpanded,
   type TrafficEntry,
 } from "./state";
 
@@ -51,6 +53,8 @@ export function renderTimeline(): HTMLElement {
 
   const root = h("div.timeline");
   root.appendChild(renderHeader(entry));
+  const entryBar = renderEntryBar(entry);
+  if (entryBar) root.appendChild(entryBar);
   root.appendChild(viewSwitcher(state.centerView));
 
   if (state.centerView === "stack") {
@@ -136,6 +140,58 @@ function renderHeader(entry: TrafficEntry): HTMLElement {
           ),
     ),
     h("div.tl-chips", null, ...chips),
+  );
+}
+
+// When the current entry belongs to a multi-turn session, render a horizontal
+// strip of chips — one per turn — so the user can hop between calls without
+// opening the sidebar tree. Hidden for solo / unsessioned entries; the chips
+// would be visual noise.
+function renderEntryBar(entry: TrafficEntry): HTMLElement | null {
+  const state = getState();
+  const session = state.sessions.find((s) => (s.entryIds ?? []).includes(entry.id));
+  if (!session) return null;
+  const ids = session.entryIds ?? [];
+  if (ids.length <= 1) return null;
+
+  const chips: HTMLElement[] = [];
+  ids.forEach((id, i) => {
+    const target = state.entries.find((e) => e.id === id);
+    if (!target) return;
+    chips.push(entryChip(target, i + 1, id === entry.id));
+  });
+  if (chips.length === 0) return null;
+  return h("div.tl-entry-bar", null, ...chips);
+}
+
+function entryChip(target: TrafficEntry, ordinal: number, active: boolean): HTMLElement {
+  const analysis = target.analysis as Analysis | undefined;
+  const usage = analysis?.anthropic?.response?.usage;
+  const totalTok = usage
+    ? (usage.inputTokens ?? 0) +
+      (usage.outputTokens ?? 0) +
+      (usage.cacheReadInputTokens ?? 0) +
+      (usage.cacheCreationInputTokens ?? 0)
+    : 0;
+  const kind = statusKind(target);
+  const classes = [
+    "tl-entry-chip",
+    active ? "active" : "",
+    kind === "err" ? "err" : "",
+    target.streaming ? "streaming" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return h(
+    "button",
+    {
+      class: classes,
+      title: `${target.method} ${target.url}`,
+      onclick: () => setState({ selectedId: target.id }),
+    },
+    h("span.tl-entry-chip-num", null, `#${ordinal}`),
+    h("span.tl-entry-chip-time", null, fmtTime(target.startedAt)),
+    totalTok > 0 ? h("span.tl-entry-chip-tok", null, fmtTok(totalTok)) : null,
   );
 }
 
@@ -233,6 +289,12 @@ function renderResponseTimeline(
   );
 }
 
+// Rough character-count threshold below which a card always renders fully
+// (no toggle, no fade). Picked empirically: ~600 chars is roughly 8 lines of
+// chat text, which fits inside the 160px collapsed cap without truncation.
+// Anything shorter doesn't benefit from a "click to expand" affordance.
+const COLLAPSE_THRESHOLD_CHARS = 600;
+
 function messageCard(
   key: string,
   role: string,
@@ -242,56 +304,313 @@ function messageCard(
 ): HTMLElement {
   const state = getState();
   const selected = state.selection.messageKey === key && !state.selection.toolUseId;
+  const collapsible = estimateBlocksLength(blocks) >= COLLAPSE_THRESHOLD_CHARS;
+  const expanded = !collapsible || state.expandedMessages.has(key);
+
+  const head = h(
+    "div.tl-card-head",
+    null,
+    collapsible
+      ? h(
+          "button",
+          {
+            class: "tl-card-toggle",
+            title: expanded ? t("conversation.collapse") : t("conversation.expand"),
+            "aria-expanded": expanded ? "true" : "false",
+            onclick: (e: Event) => {
+              e.stopPropagation();
+              toggleMessageExpanded(key);
+            },
+          },
+          expanded ? "▾" : "▸",
+        )
+      : null,
+    h(`span.role-chip.role-${role}`, null, role),
+    sub ? h("span.tl-card-sub", null, sub) : null,
+    copyButton(blocks),
+  );
+
+  const cardClasses = [
+    "tl-card",
+    `role-${role}`,
+    selected ? "selected" : "",
+    collapsible && !expanded ? "collapsed" : "",
+  ]
+    .filter(Boolean)
+    .join(".");
 
   const card = h(
-    `div.tl-card.role-${role}${selected ? ".selected" : ""}`,
+    `div.${cardClasses}`,
     {
       onclick: () => selectMessage(key),
     },
-    h(
-      "div.tl-card-head",
-      null,
-      h(`span.role-chip.role-${role}`, null, role),
-      sub ? h("span.tl-card-sub", null, sub) : null,
-    ),
+    head,
   );
 
   if (blocks.length === 0) {
     card.appendChild(h("div.tl-empty-block", null, t("conversation.responseEmpty")));
-  } else {
-    const body = h("div.tl-card-body");
-    for (const blk of blocks) {
-      body.appendChild(renderBlock(key, blk, toolResults));
-    }
-    card.appendChild(body);
+    return card;
+  }
+
+  const body = h("div.tl-card-body");
+  for (const blk of blocks) {
+    body.appendChild(renderBlock(key, blk, toolResults));
+  }
+  card.appendChild(body);
+
+  if (collapsible && !expanded) {
+    card.appendChild(
+      h(
+        "button.tl-card-expand",
+        {
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            toggleMessageExpanded(key);
+          },
+        },
+        t("conversation.expand"),
+      ),
+    );
   }
   return card;
 }
 
+function copyButton(blocks: AnthropicBlock[]): HTMLElement {
+  const btn = h("button", {
+    class: "tl-card-copy",
+    title: t("conversation.copy"),
+    "aria-label": t("conversation.copy"),
+  });
+  btn.appendChild(copyIcon());
+  btn.addEventListener("click", async (e: Event) => {
+    e.stopPropagation();
+    const text = blocksToPlainText(blocks);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyButtonState(btn, "ok");
+    } catch {
+      setCopyButtonState(btn, "err");
+    }
+  });
+  return btn;
+}
+
+function copyIcon(): SVGSVGElement {
+  // Lucide-style "copy" outline. 14px in a 24-grid; matches the visual
+  // weight of role chips and existing chevrons.
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const rect = document.createElementNS(ns, "rect");
+  rect.setAttribute("x", "9");
+  rect.setAttribute("y", "9");
+  rect.setAttribute("width", "13");
+  rect.setAttribute("height", "13");
+  rect.setAttribute("rx", "2");
+  rect.setAttribute("ry", "2");
+  svg.appendChild(rect);
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1");
+  svg.appendChild(path);
+  return svg;
+}
+
+function checkIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2.4");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const p = document.createElementNS(ns, "path");
+  p.setAttribute("d", "M20 6L9 17l-5-5");
+  svg.appendChild(p);
+  return svg;
+}
+
+function setCopyButtonState(btn: HTMLElement, status: "ok" | "err") {
+  btn.classList.add("copied");
+  if (status === "err") btn.classList.add("err");
+  btn.replaceChildren(checkIcon());
+  window.setTimeout(() => {
+    btn.classList.remove("copied", "err");
+    btn.replaceChildren(copyIcon());
+  }, 1200);
+}
+
+function blocksToPlainText(blocks: AnthropicBlock[]): string {
+  const out: string[] = [];
+  for (const blk of blocks) {
+    const type = blk.type ?? "unknown";
+    switch (type) {
+      case "text":
+        out.push(blk.text ?? "");
+        break;
+      case "thinking":
+      case "redacted_thinking":
+        out.push(`[${type}] ${blk.text ?? ""}`);
+        break;
+      case "tool_use": {
+        const inputStr =
+          typeof blk.input === "string" ? blk.input : safeStringify(blk.input);
+        out.push(`[tool_use ${blk.name ?? "?"} ${blk.id ?? ""}]\n${inputStr}`);
+        break;
+      }
+      case "tool_result": {
+        let content = "";
+        if (typeof blk.content === "string") {
+          content = blk.content;
+        } else if (Array.isArray(blk.content)) {
+          content = (blk.content as AnthropicBlock[])
+            .map((c) => (typeof c.text === "string" ? c.text : safeStringify(c)))
+            .join("\n");
+        } else if (blk.content !== undefined && blk.content !== null) {
+          content = safeStringify(blk.content);
+        }
+        out.push(`[tool_result ${blk.toolUseId ?? ""}]\n${content}`);
+        break;
+      }
+      case "image":
+        out.push("[image]");
+        break;
+      default:
+        out.push(`[${type}] ${safeStringify(blk.raw ?? blk)}`);
+    }
+  }
+  return out.join("\n\n");
+}
+
+function safeStringify(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function estimateBlocksLength(blocks: AnthropicBlock[]): number {
+  let total = 0;
+  for (const blk of blocks) {
+    if (typeof blk.text === "string") {
+      total += blk.text.length;
+    }
+    if (blk.type === "tool_use") {
+      total += 80;
+      total += safeStringifyLength(blk.input);
+    } else if (blk.type === "tool_result") {
+      if (typeof blk.content === "string") {
+        total += blk.content.length;
+      } else if (Array.isArray(blk.content)) {
+        for (const c of blk.content as AnthropicBlock[]) {
+          if (typeof c.text === "string") total += c.text.length;
+        }
+      }
+    }
+    total += 24; // tag / wrapper overhead per block
+  }
+  return total;
+}
+
+function safeStringifyLength(value: unknown): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "string") return value.length;
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return 0;
+  }
+}
+
+// Tools cards live in the same expansion namespace as message cards under
+// the reserved key "tools" — messageCard keys never collide ("sys", "resp",
+// "req-N"). Long tool catalogs (Claude Code's default ~63 entries) blow out
+// the timeline if they render fully by default.
 function toolsCard(tools: AnthropicTool[]): HTMLElement {
+  const state = getState();
+  const key = "tools";
+  const collapsible = estimateToolsLength(tools) >= COLLAPSE_THRESHOLD_CHARS;
+  const expanded = !collapsible || state.expandedMessages.has(key);
+
+  const head = h(
+    "div.tl-card-head",
+    null,
+    collapsible
+      ? h(
+          "button",
+          {
+            class: "tl-card-toggle",
+            title: expanded ? t("conversation.collapse") : t("conversation.expand"),
+            "aria-expanded": expanded ? "true" : "false",
+            onclick: (e: Event) => {
+              e.stopPropagation();
+              toggleMessageExpanded(key);
+            },
+          },
+          expanded ? "▾" : "▸",
+        )
+      : null,
+    h("span.role-chip.role-tools", null, t("conversation.toolsTitle")),
+    h("span.tl-card-sub", null, `${tools.length}`),
+  );
+
   const list = h("div.tl-tools-list");
   for (const tl of tools) {
-    const row = h(
-      "div.tl-tool-row",
-      null,
-      h("span.tl-tool-name", null, tl.name ?? "?"),
-      tl.description
-        ? h("span.tl-tool-desc", null, ` — ${tl.description}`)
-        : null,
+    list.appendChild(
+      h(
+        "div.tl-tool-row",
+        null,
+        h("span.tl-tool-name", null, tl.name ?? "?"),
+        tl.description
+          ? h("span.tl-tool-desc", null, ` — ${tl.description}`)
+          : null,
+      ),
     );
-    list.appendChild(row);
   }
-  return h(
-    "div.tl-card.role-tools",
-    null,
-    h(
-      "div.tl-card-head",
-      null,
-      h("span.role-chip.role-tools", null, t("conversation.toolsTitle")),
-      h("span.tl-card-sub", null, `${tools.length}`),
-    ),
-    list,
-  );
+
+  const cardClasses = ["tl-card", "role-tools", collapsible && !expanded ? "collapsed" : ""]
+    .filter(Boolean)
+    .join(".");
+
+  const card = h(`div.${cardClasses}`, null, head, list);
+
+  if (collapsible && !expanded) {
+    card.appendChild(
+      h(
+        "button.tl-card-expand",
+        {
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            toggleMessageExpanded(key);
+          },
+        },
+        t("conversation.expand"),
+      ),
+    );
+  }
+  return card;
+}
+
+function estimateToolsLength(tools: AnthropicTool[]): number {
+  let total = 0;
+  for (const tl of tools) {
+    total += (tl.name?.length ?? 0) + (tl.description?.length ?? 0) + 16;
+  }
+  return total;
 }
 
 function renderBlock(

@@ -9,15 +9,17 @@ import type { components } from "../../api/client";
 import { getClient } from "../../api/client";
 import { t } from "../i18n";
 import { h } from "./dom";
-import { fmtDuration, fmtTime, statusKind } from "./format";
+import { fmtDuration, fmtSessionStamp, fmtTime, statusKind } from "./format";
 import { applyFilter } from "./grouping";
 import {
   clearEntries,
   getState,
   selectSession,
   setFilters,
+  setRenamingSession,
   setState,
   toggleGroupCollapsed,
+  toggleSessionExpanded,
   type SessionSummary,
   type TrafficEntry,
 } from "./state";
@@ -125,29 +127,67 @@ function appendSessionList(
 
 function renderSessionGroup(s: SessionSummary, entries: TrafficEntry[]): HTMLElement {
   const state = getState();
-  const collapsed = state.collapsedGroups.has(s.id);
+  const expanded = state.expandedSessions.has(s.id);
   const active = state.selectedSessionId === s.id;
+  const renaming = state.renamingSessionId === s.id;
   const totalIn = (s.inputTokens ?? 0) + (s.cacheRead ?? 0) + (s.cacheCreate ?? 0);
   const totalOut = s.outputTokens ?? 0;
+  const defaultLabel = fmtSessionStamp(s.startedAt);
+  const label = s.name || defaultLabel;
+  const modelHint = s.model || s.provider || "";
+
+  const chev = h(
+    "span.chev",
+    {
+      // The chevron toggles expansion independently of which session is
+      // selected — clicking it should never change the selection.
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        toggleSessionExpanded(s.id);
+      },
+    },
+    expanded ? "▾" : "▸",
+  );
+
+  const labelNode = renaming
+    ? renameInput(s, s.name || "")
+    : h(
+        "span.tree-group-label",
+        { title: modelHint ? `${label} · ${modelHint}` : label },
+        label,
+      );
+
+  const renameBtn = renaming
+    ? null
+    : h(
+        "button",
+        {
+          class: "tree-group-rename",
+          title: t("sidebar.rename"),
+          "aria-label": t("sidebar.rename"),
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            setRenamingSession(s.id);
+          },
+        },
+        "✎",
+      );
 
   const header = h(
     `div.tree-group-hdr${active ? ".active" : ""}`,
     {
       onclick: () => {
-        if (!active) selectSession(s.id);
-        else toggleGroupCollapsed(s.id);
+        if (renaming) return;
+        selectSession(s.id);
       },
     },
-    h("span.chev", null, collapsed ? "▸" : "▾"),
+    chev,
     h(
       `span.session-dot.${statusDot(s)}`,
       null,
     ),
-    h(
-      "span.tree-group-label",
-      null,
-      s.model || s.provider,
-    ),
+    labelNode,
+    renameBtn,
     h(
       "span.tree-group-meta",
       null,
@@ -155,20 +195,73 @@ function renderSessionGroup(s: SessionSummary, entries: TrafficEntry[]): HTMLEle
     ),
   );
 
-  const items = collapsed
-    ? null
-    : h(
+  const items = expanded
+    ? h(
         "div.tree-group-items",
         null,
         ...entries.map((e) => entryRow(e)),
-      );
+      )
+    : null;
 
   return h(
-    `div.tree-group${collapsed ? ".collapsed" : ""}`,
+    `div.tree-group${expanded ? "" : ".collapsed"}`,
     null,
     header,
     items,
   );
+}
+
+function renameInput(s: SessionSummary, initial: string): HTMLInputElement {
+  const input = h("input", {
+    class: "tree-group-rename-input",
+    type: "text",
+    value: initial,
+    placeholder: fmtSessionStamp(s.startedAt),
+    maxlength: "128",
+  }) as HTMLInputElement;
+
+  // Suppress card-level click and keep selection state stable while editing.
+  input.addEventListener("click", (e) => e.stopPropagation());
+
+  const commit = async () => {
+    const next = input.value.trim();
+    if (next === (s.name ?? "")) {
+      setRenamingSession(null);
+      return;
+    }
+    try {
+      const client = await getClient();
+      await client.PATCH("/v1/sessions/{id}", {
+        params: { path: { id: s.id } },
+        body: { name: next },
+      });
+    } catch {
+      // Roll back silently on failure — the next /v1/sessions refresh will
+      // bring whatever the server has back into the renderer state.
+    }
+    setRenamingSession(null);
+  };
+
+  const cancel = () => setRenamingSession(null);
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    }
+  });
+  input.addEventListener("blur", () => {
+    void commit();
+  });
+  // Focus after this render cycle so the input is editable immediately.
+  window.setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 0);
+  return input;
 }
 
 function renderRawGroup(key: string, label: string, entries: TrafficEntry[]): HTMLElement {

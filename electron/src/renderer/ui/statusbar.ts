@@ -17,11 +17,11 @@ export function renderStatusbar(): HTMLElement {
   const bytesIn = s.entries.reduce((acc, e) => acc + (e.requestSize ?? 0), 0);
   const bytesOut = s.entries.reduce((acc, e) => acc + (e.responseSize ?? 0), 0);
 
+  // Session-level cache hit rate now lives inside the right-hand Overview
+  // tab. The statusbar keeps the global counters (entries / bytes / tokens)
+  // so the bottom strip still tells the user "is anything happening?".
   const totals = aggregateUsage(s.entries);
-  const inputAll = totals.input + totals.cacheRead + totals.cacheCreate;
-  const tokAll = inputAll + totals.output;
-  const cachePct =
-    inputAll > 0 ? Math.round((totals.cacheRead / inputAll) * 100) : 0;
+  const tokAll = totals.input + totals.cacheRead + totals.cacheCreate + totals.output;
 
   const inSettings = s.view === "settings";
   const settingsBtn = h(
@@ -53,15 +53,6 @@ export function renderStatusbar(): HTMLElement {
           "·",
           " ",
           t("status.tokens", { total: fmtTok(tokAll) }),
-        )
-      : null,
-    inputAll > 0
-      ? h(
-          "span.ok",
-          null,
-          "·",
-          " ",
-          t("status.cached", { pct: String(cachePct) }),
         )
       : null,
     h("span.spacer"),

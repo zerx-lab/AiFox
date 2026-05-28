@@ -27,6 +27,17 @@ export function fmtClock(iso: string): string {
   return d.toLocaleString();
 }
 
+// Compact local timestamp suitable for session list labels, e.g.
+// "2026-05-28 14:29". Uses local time; no seconds (sessions group multi-turn
+// conversations so second-level precision is noise).
+export function fmtSessionStamp(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function isPending(entry: {
   endedAt?: string;
   statusCode?: number;

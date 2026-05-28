@@ -471,6 +471,23 @@ components:
         - configured
         - enabled
       type: object
+    Rename-sessionRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Rename-sessionRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        name:
+          description: Display label; empty string clears the label.
+          maxLength: 128
+          type: string
+      required:
+        - name
+      type: object
     ReplayInputBody:
       additionalProperties: false
       properties:
@@ -570,6 +587,9 @@ components:
           format: date-time
           type: string
         model:
+          type: string
+        name:
+          description: User-supplied label. Empty when the user has not renamed this session.
           type: string
         outputTokens:
           format: int64
@@ -1027,6 +1047,37 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Fetch one session by id.
+      tags:
+        - sessions
+    patch:
+      operationId: rename-session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Rename-sessionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionSummaryBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Rename a session. An empty name clears the label.
       tags:
         - sessions
   /v1/settings:

@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/zerx-lab/ai-fox/internal/config"
 	"github.com/zerx-lab/ai-fox/internal/proxy"
@@ -69,7 +70,8 @@ func runServer() error {
 		}
 	}
 
-	aggregator := session.New(traffic)
+	namesPath := filepath.Join(filepath.Dir(config.DefaultPath()), "session-names.json")
+	aggregator := session.New(traffic, namesPath)
 	_ = aggregator.Start()
 
 	built, err := server.Build(server.Config{
@@ -125,7 +127,7 @@ func dumpOpenAPI(path string) error {
 		Settings: cfg,
 		Traffic:  traffic,
 		Proxy:    ctrl,
-		Sessions: session.New(traffic),
+		Sessions: session.New(traffic, ""),
 	})
 	if err != nil {
 		return err
