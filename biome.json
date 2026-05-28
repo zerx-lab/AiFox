@@ -1,0 +1,22 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+  "files": {
+    "includes": [
+      "electron/src/**/*.{ts,tsx,js,jsx}",
+      "*.ts",
+      "!electron/src/api/schema.ts",
+      "!**/.vite",
+      "!**/out",
+      "!**/node_modules"
+    ]
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  "formatter": {
+    "enabled": false
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "author": "zerx-lab",
+  "description": "Relay desktop scaffold: Go (Huma) backend + Electron renderer with end-to-end typed API.",
+  "devDependencies": {
+    "@biomejs/biome": "2.4.15",
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron-forge/plugin-fuses": "^7.11.1",
+    "@electron-forge/plugin-vite": "^7.11.1",
+    "@electron-forge/shared-types": "^7.11.1",
+    "@electron/fuses": "^1.8.0",
+    "@reforged/maker-appimage": "^5.2.0",
+    "@types/node": "^25.9.0",
+    "chokidar": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "electron": "^42.1.0",
+    "openapi-fetch": "^0.17.0",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.13"
+  },
+  "main": ".vite/build/main.js",
+  "name": "ai-fox",
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron-winstaller"
+    ]
+  },
+  "private": true,
+  "scripts": {
+    "codegen": "openapi-typescript openapi.yaml -o electron/src/api/schema.ts",
+    "make": "electron-forge make",
+    "package": "electron-forge package",
+    "start": "electron-forge start",
+    "typecheck": "tsc --noEmit"
+  },
+  "version": "0.1.0"
+}

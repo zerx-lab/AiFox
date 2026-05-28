@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Relay
+GenericName=Relay Desktop
+Comment=Relay desktop scaffold (Go backend + Electron renderer)
+Exec=ai-fox %U
+Icon=relay
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true
+StartupWMClass=ai-fox

@@ -1,0 +1,188 @@
+version: "3"
+
+# Single source of orchestration for the scaffold. The non-obvious order:
+#   change Go API -> task openapi -> task codegen -> TS recompiles.
+# `task dev` and `task build` chain those for you.
+
+vars:
+  GO_BIN: ai-fox-backend
+  # Directory uses Node's arch naming (x64/arm64/ia32) because it's consumed by
+  # Electron at runtime via `process.arch`. Go's GOARCH (amd64/386) is mapped here.
+  NODE_ARCH: '{{if eq ARCH "amd64"}}x64{{else if eq ARCH "386"}}ia32{{else}}{{ARCH}}{{end}}'
+  PLATFORM_DIR: "{{OS}}-{{.NODE_ARCH}}"
+  BIN_OUT: 'bin/{{.PLATFORM_DIR}}/{{.GO_BIN}}{{if eq OS "windows"}}.exe{{end}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  # ---- Go ----
+
+  openapi:
+    desc: Dump the OpenAPI schema from Go to openapi.yaml
+    cmds:
+      - go run . openapi openapi.yaml
+    sources:
+      - "**/*.go"
+    generates:
+      - openapi.yaml
+
+  build:go:
+    desc: Build the Go sidecar binary into bin/<os>-<arch>/
+    cmds:
+      - mkdir -p "bin/{{.PLATFORM_DIR}}"
+      - go build -trimpath -ldflags="-s -w" -o "{{.BIN_OUT}}" .
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BIN_OUT}}"
+
+  test:go:
+    desc: Run Go tests
+    cmds:
+      - go test ./...
+
+  lint:go:
+    desc: Run golangci-lint (govet/nilness, staticcheck, errcheck, ineffassign, unused, gofmt)
+    cmds:
+      - golangci-lint run ./...
+
+  install:cli:
+    desc: Install the `zerx` scaffold CLI into $GOBIN (or $GOPATH/bin)
+    cmds:
+      - go install ./cmd/zerx
+
+  # ---- TS / Electron ----
+
+  install:
+    desc: Install pnpm dependencies
+    cmds:
+      - pnpm install
+    sources:
+      - package.json
+      - pnpm-lock.yaml
+
+  codegen:
+    desc: Regenerate electron/src/api/schema.ts from openapi.yaml
+    deps: [openapi]
+    cmds:
+      - pnpm run codegen
+    sources:
+      - openapi.yaml
+    generates:
+      - electron/src/api/schema.ts
+
+  typecheck:
+    desc: TS typecheck (no emit)
+    deps: [codegen]
+    cmds:
+      - pnpm run typecheck
+
+  lint:ts:
+    desc: Biome lint over electron/src (schema.ts excluded)
+    cmds:
+      - pnpm exec biome lint
+
+  lint:
+    desc: Run all linters (Go + TS)
+    deps: [lint:go, lint:ts]
+
+  verify:
+    desc: Acceptance gate before commit (typecheck + tests + lint)
+    deps: [typecheck, test:go, lint]
+
+  # ---- Composite ----
+
+  dev:
+    desc: Build Go sidecar, regenerate types, then launch Electron + Go watcher
+    # On *.go change the watcher rebuilds the sidecar and touches .dev-reload;
+    # Electron's main process fs.watches that file and respawns the sidecar.
+    # See scripts/dev-watcher.mjs and installDevReloader in
+    # electron/src/main/main.ts.
+    deps: [build:go, codegen]
+    cmds:
+      - pnpm exec concurrently -k -n electron,watcher -c blue,magenta "pnpm run start" "node scripts/dev-watcher.mjs"
+
+  clean:dev:
+    desc: Remove dev-only artifacts (.dev-reload)
+    cmds:
+      - rm -f .dev-reload
+
+  build:
+    desc: Produce an unpacked Electron app (out/<app>-<platform>-<arch>/) with the Go sidecar bundled
+    deps: [build:go, codegen, typecheck, icons]
+    cmds:
+      - pnpm run package
+
+  make:
+    desc: Produce distributable installers/archives via Electron Forge makers
+    deps: [build:go, codegen, typecheck, icons]
+    cmds:
+      - pnpm run make
+
+  build:arch:
+    desc: Produce an Arch Linux pacman package (.pkg.tar.zst) under out/make/arch/
+    # No Electron Forge maker for pacman exists today (到2026, the @reforged
+    # suite covers AppImage/Flatpak/Snap but not pacman). We generate a
+    # PKGBUILD on the fly that wraps the unpacked app from `task build` and
+    # hand it to makepkg. See scripts/make-arch.sh for the why.
+    platforms: [linux]
+    deps: [build]
+    cmds:
+      - bash scripts/make-arch.sh
+
+  # ---- Icons / desktop integration ----
+  #
+  # Wayland compositors don't accept window-pixmap icons the way X11 does. The
+  # taskbar/launcher icon is looked up by xdg_toplevel.app_id -> .desktop file
+  # -> Icon name -> hicolor theme PNG. So for `task dev` to show the relay
+  # logo instead of Electron's default, we install a user-level .desktop +
+  # hicolor icons matching the app_id "relay" (see app.setName in main.ts).
+
+  icons:
+    desc: Render relay-bridge.svg into multi-size PNGs under assets/logo/png/
+    cmds:
+      - mkdir -p assets/logo/png
+      - for: [16, 32, 48, 64, 128, 256, 512]
+        cmd: rsvg-convert -w {{.ITEM}} -h {{.ITEM}} assets/logo/relay-bridge.svg -o assets/logo/png/relay-{{.ITEM}}.png
+    sources:
+      - assets/logo/relay-bridge.svg
+    generates:
+      - assets/logo/png/relay-16.png
+      - assets/logo/png/relay-32.png
+      - assets/logo/png/relay-48.png
+      - assets/logo/png/relay-64.png
+      - assets/logo/png/relay-128.png
+      - assets/logo/png/relay-256.png
+      - assets/logo/png/relay-512.png
+
+  install:desktop:
+    desc: Install hicolor icons + relay.desktop into ~/.local/share (Linux dev only)
+    platforms: [linux]
+    deps: [icons]
+    cmds:
+      - for: [16, 32, 48, 64, 128, 256, 512]
+        cmd: install -Dm644 assets/logo/png/relay-{{.ITEM}}.png "$HOME/.local/share/icons/hicolor/{{.ITEM}}x{{.ITEM}}/apps/relay.png"
+      - install -Dm644 assets/logo/relay.desktop "$HOME/.local/share/applications/relay.desktop"
+      - gtk-update-icon-cache -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+      - update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+
+  uninstall:desktop:
+    desc: Remove the dev-installed hicolor icons + relay.desktop
+    platforms: [linux]
+    cmds:
+      - for: [16, 32, 48, 64, 128, 256, 512]
+        cmd: rm -f "$HOME/.local/share/icons/hicolor/{{.ITEM}}x{{.ITEM}}/apps/relay.png"
+      - rm -f "$HOME/.local/share/applications/relay.desktop"
+      - gtk-update-icon-cache -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+      - update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+
+  clean:
+    desc: Remove all build artifacts
+    cmds:
+      - rm -rf bin .vite out node_modules/.cache
+      - rm -f openapi.yaml electron/src/api/schema.ts .dev-reload

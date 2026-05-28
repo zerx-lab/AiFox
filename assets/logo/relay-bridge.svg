@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <title>relay — bridge</title>
+  <rect width="256" height="256" rx="56" fill="#0F172A"/>
+  <!-- two endpoints -->
+  <circle cx="60" cy="128" r="20" fill="#38BDF8"/>
+  <circle cx="196" cy="128" r="20" fill="#38BDF8"/>
+  <!-- relay middle node -->
+  <rect x="108" y="108" width="40" height="40" rx="10" fill="#E2E8F0"/>
+  <!-- connecting lines -->
+  <line x1="80" y1="128" x2="108" y2="128" stroke="#E2E8F0" stroke-width="8" stroke-linecap="round"/>
+  <line x1="148" y1="128" x2="176" y2="128" stroke="#E2E8F0" stroke-width="8" stroke-linecap="round"/>
+  <!-- packet dots in flight -->
+  <circle cx="94" cy="128" r="4" fill="#38BDF8"/>
+  <circle cx="162" cy="128" r="4" fill="#38BDF8"/>
+</svg>
