@@ -1,27 +1,45 @@
-// Sidebar: filterable list of captured traffic entries (newest first).
+// Sidebar — sessions first, entries nested beneath. When an entry doesn't
+// belong to a known session (parser returned no normalized request) we
+// fall back to an "Unsessioned" bucket so nothing disappears.
+//
+// Filters apply to the entry layer; a session that ends up with zero
+// matching entries is hidden until the filter clears.
 
+import type { components } from "../../api/client";
 import { getClient } from "../../api/client";
 import { t } from "../i18n";
 import { h } from "./dom";
 import { fmtDuration, fmtTime, statusKind } from "./format";
-import { clearEntries, getState, setState, type TrafficEntry } from "./state";
+import { applyFilter } from "./grouping";
+import {
+  clearEntries,
+  getState,
+  selectSession,
+  setFilters,
+  setState,
+  toggleGroupCollapsed,
+  type SessionSummary,
+  type TrafficEntry,
+} from "./state";
+
+type Analysis = components["schemas"]["Analysis"];
 
 export function renderSidebar(): HTMLElement {
   const state = getState();
-  const filtered = applyFilter(state.entries, state.filter);
+  const filtered = applyFilter(state.entries, state.filters);
 
   const filterInput = h("input", {
     type: "text",
     placeholder: t("sidebar.filterPlaceholder"),
-    value: state.filter,
-    oninput: (e: Event) => setState({ filter: (e.target as HTMLInputElement).value }),
+    value: state.filters.text,
+    oninput: (e: Event) => setFilters({ text: (e.target as HTMLInputElement).value }),
   }) as HTMLInputElement;
 
   const head = h(
     "div.side-head",
     null,
-    h("span.label", null, t("nav.traffic")),
-    h("span.count", null, String(state.entries.length)),
+    h("span.label", null, t("nav.sessions")),
+    h("span.count", null, `${filtered.length} / ${state.entries.length}`),
   );
 
   const list = h("div.side-list");
@@ -35,7 +53,7 @@ export function renderSidebar(): HTMLElement {
       ),
     );
   } else {
-    for (const entry of filtered) list.appendChild(entryRow(entry));
+    appendSessionList(list, state.sessions, filtered);
   }
 
   const actions = h(
@@ -58,6 +76,120 @@ export function renderSidebar(): HTMLElement {
   return h("div.sidebar", null, head, h("div.side-filter", null, filterInput), actions, list);
 }
 
+function appendSessionList(
+  root: HTMLElement,
+  sessions: SessionSummary[],
+  filtered: TrafficEntry[],
+) {
+  const state = getState();
+
+  // Build a fast lookup: visible entries by sessionId; ones without any
+  // session land in the "unsessioned" bucket.
+  const visibleIds = new Set(filtered.map((e) => e.id));
+  const bySession = new Map<string, TrafficEntry[]>();
+  const unsessioned: TrafficEntry[] = [];
+
+  // First, fold known sessions in.
+  for (const s of sessions) {
+    const visible: TrafficEntry[] = [];
+    for (const id of s.entryIds ?? []) {
+      if (!visibleIds.has(id)) continue;
+      const entry = state.entries.find((e) => e.id === id);
+      if (entry) visible.push(entry);
+    }
+    if (visible.length > 0) bySession.set(s.id, visible);
+  }
+
+  // Anything that didn't show up under a known session lands in unsessioned.
+  const sessionedIds = new Set<string>();
+  for (const arr of bySession.values()) for (const e of arr) sessionedIds.add(e.id);
+  for (const e of filtered) if (!sessionedIds.has(e.id)) unsessioned.push(e);
+
+  // Sessions newest first (matches API List).
+  for (const s of sessions) {
+    const entries = bySession.get(s.id);
+    if (!entries || entries.length === 0) continue;
+    root.appendChild(renderSessionGroup(s, entries));
+  }
+
+  if (unsessioned.length > 0) {
+    root.appendChild(
+      renderRawGroup(
+        "unsessioned",
+        t("sidebar.unsessioned"),
+        unsessioned,
+      ),
+    );
+  }
+}
+
+function renderSessionGroup(s: SessionSummary, entries: TrafficEntry[]): HTMLElement {
+  const state = getState();
+  const collapsed = state.collapsedGroups.has(s.id);
+  const active = state.selectedSessionId === s.id;
+  const totalIn = (s.inputTokens ?? 0) + (s.cacheRead ?? 0) + (s.cacheCreate ?? 0);
+  const totalOut = s.outputTokens ?? 0;
+
+  const header = h(
+    `div.tree-group-hdr${active ? ".active" : ""}`,
+    {
+      onclick: () => {
+        if (!active) selectSession(s.id);
+        else toggleGroupCollapsed(s.id);
+      },
+    },
+    h("span.chev", null, collapsed ? "▸" : "▾"),
+    h(
+      `span.session-dot.${statusDot(s)}`,
+      null,
+    ),
+    h(
+      "span.tree-group-label",
+      null,
+      s.model || s.provider,
+    ),
+    h(
+      "span.tree-group-meta",
+      null,
+      `${entries.length} · ${fmtTok(totalIn)}/${fmtTok(totalOut)}`,
+    ),
+  );
+
+  const items = collapsed
+    ? null
+    : h(
+        "div.tree-group-items",
+        null,
+        ...entries.map((e) => entryRow(e)),
+      );
+
+  return h(
+    `div.tree-group${collapsed ? ".collapsed" : ""}`,
+    null,
+    header,
+    items,
+  );
+}
+
+function renderRawGroup(key: string, label: string, entries: TrafficEntry[]): HTMLElement {
+  const state = getState();
+  const collapsed = state.collapsedGroups.has(key);
+  return h(
+    `div.tree-group${collapsed ? ".collapsed" : ""}`,
+    null,
+    h(
+      "div.tree-group-hdr",
+      { onclick: () => toggleGroupCollapsed(key) },
+      h("span.chev", null, collapsed ? "▸" : "▾"),
+      h("span.tree-group-label", null, label),
+      h("span.tree-group-meta", null, String(entries.length)),
+    ),
+    collapsed
+      ? null
+      : h("div.tree-group-items", null, ...entries.map((e) => entryRow(e))),
+  );
+}
+
 function entryRow(entry: TrafficEntry): HTMLElement {
   const state = getState();
   const active = state.selectedId === entry.id;
@@ -73,6 +205,16 @@ function entryRow(entry: TrafficEntry): HTMLElement {
           ? "SSE"
           : String(entry.statusCode);
 
+  const analysis = entry.analysis as Analysis | undefined;
+  const model = analysis?.anthropic?.request?.model || analysis?.anthropic?.response?.model;
+  const usage = analysis?.anthropic?.response?.usage;
+  const totalTok = usage
+    ? (usage.inputTokens ?? 0) +
+      (usage.outputTokens ?? 0) +
+      (usage.cacheReadInputTokens ?? 0) +
+      (usage.cacheCreationInputTokens ?? 0)
+    : 0;
+
   return h(
     "div",
     {
@@ -80,26 +222,33 @@ function entryRow(entry: TrafficEntry): HTMLElement {
       onclick: () => setState({ selectedId: entry.id }),
     },
     h("span", { class: `badge ${kind}` }, badgeLabel),
-    h("span.path", { title: entry.url }, entry.method, " ", entry.url),
+    h(
+      "span.path",
+      { title: entry.url },
+      model ? h("span.entry-model", null, model) : null,
+      h("span.entry-id", null, entry.id),
+    ),
     h("span.meta", null, fmtDuration(entry.durationMillis)),
     h(
       "span.sub",
       null,
       h("span", null, fmtTime(entry.startedAt)),
+      totalTok > 0 ? h("span", null, `${totalTok.toLocaleString()} tok`) : null,
       entry.streaming ? h("span", null, "stream") : null,
       entry.truncated ? h("span", null, "truncated") : null,
+      entry.replayedFromId ? h("span.entry-replayed", null, `↩ ${entry.replayedFromId}`) : null,
     ),
   );
 }
 
-function applyFilter(entries: TrafficEntry[], filter: string): TrafficEntry[] {
-  if (!filter.trim()) return entries;
-  const needle = filter.trim().toLowerCase();
-  return entries.filter((e) => {
-    return (
-      e.url.toLowerCase().includes(needle) ||
-      e.method.toLowerCase().includes(needle) ||
-      String(e.statusCode).includes(needle)
-    );
-  });
+function statusDot(s: SessionSummary): string {
+  if (s.hasError) return "err";
+  if (s.hasUnfinished) return "warn";
+  return "ok";
+}
+
+function fmtTok(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }

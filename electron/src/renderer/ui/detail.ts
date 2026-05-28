@@ -1,21 +1,22 @@
-// Right-hand inspect panel for the selected traffic entry. Tabs are the
-// "raw" facets — overview, headers, request body, response body — plus a
-// contextual "Tool" tab that lights up when a tool_use block is selected in
-// the center timeline.
+// Right-hand inspect panel for the selected traffic entry. Tabs span the
+// "raw" facets (overview, headers, request, response) plus three structured
+// analyses (cache, tokens, tools) that surface what the parser has
+// extracted from an Anthropic Messages call.
 
 import type { components } from "../../api/client";
 import { t } from "../i18n";
-import { formatBody } from "./body";
+import { renderCache } from "./cache";
 import { h } from "./dom";
 import { fmtBytes, fmtClock, fmtDuration, isPending } from "./format";
-import { highlight } from "./highlight";
+import { renderRawRequest, renderRawResponse } from "./raw-http";
 import {
   getState,
   setDetailTab,
   type DetailTab,
   type TrafficEntry,
 } from "./state";
-import { findToolUseInEntry } from "./timeline";
+import { renderTokens } from "./tokens";
+import { renderTools } from "./tools";
 
 type Analysis = components["schemas"]["Analysis"];
 type AnthropicUsage = components["schemas"]["AnthropicUsage"];
@@ -32,16 +33,21 @@ export function renderDetail(): HTMLElement {
     );
   }
 
-  // If the user clicked a tool_use we surface the Tool tab; otherwise clamp
-  // back to "overview" so we don't get stuck on an inactive tab.
+  const analysis = entry.analysis as Analysis | undefined;
+  const hasAnthropic = !!analysis?.anthropic;
+
+  // Tabs are dynamic: cache/tokens/tools only show up if we actually have
+  // structured data; otherwise the user sees the raw side only.
   let tab: DetailTab = state.detailTab;
-  if (tab === "tool" && !state.selection.toolUseId) tab = "overview";
+  if (!hasAnthropic && (tab === "cache" || tab === "tokens" || tab === "tools")) {
+    tab = "overview";
+  }
 
   return h(
     "aside.detail",
     null,
     detailHead(entry),
-    detailTabs(tab),
+    detailTabs(tab, hasAnthropic),
     h("div.detail-body", null, renderTabBody(entry, tab)),
   );
 }
@@ -76,11 +82,13 @@ function detailHead(entry: TrafficEntry): HTMLElement {
   );
 }
 
-function detailTabs(tab: DetailTab): HTMLElement {
+function detailTabs(tab: DetailTab, hasAnthropic: boolean): HTMLElement {
   const tabs: HTMLElement[] = [];
   tabs.push(tabBtn("overview", t("detail.tabs.overview"), tab));
-  if (getState().selection.toolUseId) {
-    tabs.push(tabBtn("tool", t("detail.tabs.tool"), tab));
+  if (hasAnthropic) {
+    tabs.push(tabBtn("cache", t("detail.tabs.cache"), tab));
+    tabs.push(tabBtn("tokens", t("detail.tabs.tokens"), tab));
+    tabs.push(tabBtn("tools", t("detail.tabs.tools"), tab));
   }
   tabs.push(tabBtn("headers", t("detail.tabs.headers"), tab));
   tabs.push(tabBtn("request", t("detail.tabs.request"), tab));
@@ -100,17 +108,28 @@ function tabBtn(tab: DetailTab, label: string, active: DetailTab): HTMLElement {
 }
 
 function renderTabBody(entry: TrafficEntry, tab: DetailTab): HTMLElement {
+  const analysis = entry.analysis as Analysis | undefined;
   switch (tab) {
     case "overview":
       return overviewBody(entry);
-    case "tool":
-      return toolBody(entry);
+    case "cache":
+      return renderCache(analysis?.anthropic);
+    case "tokens": {
+      const usage = analysis?.anthropic?.response?.usage as AnthropicUsage | undefined;
+      const model =
+        analysis?.anthropic?.request?.model ||
+        analysis?.anthropic?.response?.model ||
+        undefined;
+      return renderTokens(usage, model);
+    }
+    case "tools":
+      return renderTools(entry);
     case "headers":
       return headersBody(entry);
     case "request":
-      return ioBody(entry.requestBody ?? "", entry.requestHeaders ?? {});
+      return renderRawRequest(entry);
     case "response":
-      return ioBody(entry.responseBody ?? "", entry.responseHeaders ?? {});
+      return renderRawResponse(entry);
   }
 }
 
@@ -222,89 +241,6 @@ function statCell(label: string, value: string, variant?: string): HTMLElement {
   );
 }
 
-function toolBody(entry: TrafficEntry): HTMLElement {
-  const state = getState();
-  const id = state.selection.toolUseId;
-  if (!id) return h("div.detail-empty", null, t("detail.toolEmpty"));
-  const { use, result } = findToolUseInEntry(entry, id);
-  if (!use) return h("div.detail-empty", null, t("detail.toolMissing"));
-
-  const sections = h("div");
-  sections.appendChild(
-    h(
-      "div.section",
-      null,
-      h(
-        "div.section-head",
-        null,
-        h("h3", null, t("detail.toolName")),
-        h("span.body-kind", null, use.name ?? "?"),
-      ),
-      use.id ? h("div.detail-mono", null, use.id) : null,
-    ),
-  );
-  sections.appendChild(
-    h(
-      "div.section",
-      null,
-      h("h3", null, t("detail.toolArgs")),
-      jsonBox(use.input ?? {}),
-    ),
-  );
-  if (result) {
-    const isErr = result.isError === true;
-    sections.appendChild(
-      h(
-        "div.section",
-        null,
-        h(
-          "div.section-head",
-          null,
-          h("h3", null, t("detail.toolResult")),
-          h(`span.body-kind${isErr ? ".err" : ".ok"}`, null, isErr ? "ERROR" : "OK"),
-        ),
-        renderToolResult(result.content),
-      ),
-    );
-  } else {
-    sections.appendChild(
-      h("div.banner.info", null, t("detail.toolNoResult")),
-    );
-  }
-  return sections;
-}
-
-function renderToolResult(content: unknown): HTMLElement {
-  if (typeof content === "string") {
-    return h("pre.codebox.kind-raw", null, content);
-  }
-  if (Array.isArray(content)) {
-    const wrap = h("div");
-    for (const c of content as Array<{ type?: string; text?: string }>) {
-      if (c.type === "text" && typeof c.text === "string") {
-        wrap.appendChild(h("pre.codebox.kind-raw", null, c.text));
-      } else {
-        wrap.appendChild(jsonBox(c));
-      }
-    }
-    return wrap;
-  }
-  return jsonBox(content ?? null);
-}
-
-function jsonBox(value: unknown): HTMLElement {
-  let text: string;
-  try {
-    text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  } catch {
-    text = String(value);
-  }
-  const pre = document.createElement("pre");
-  pre.className = "codebox kind-json";
-  pre.appendChild(highlight(text, "json"));
-  return pre;
-}
-
 function headersBody(entry: TrafficEntry): HTMLElement {
   return h(
     "div",
@@ -337,32 +273,6 @@ function headersTable(headers: Record<string, string>): HTMLElement {
     wrap.appendChild(h("span.hv", null, redact(k, v)));
   }
   return wrap;
-}
-
-function ioBody(body: string, headers: Record<string, string>): HTMLElement {
-  let bodyEl: HTMLElement;
-  let kindBadge: HTMLElement | null = null;
-  if (body) {
-    const formatted = formatBody(body, headers);
-    const pre = document.createElement("pre");
-    pre.className = `codebox kind-${formatted.kind}`;
-    pre.appendChild(highlight(formatted.text, formatted.kind));
-    bodyEl = pre;
-    kindBadge = h("span.body-kind", null, formatted.kind.toUpperCase());
-  } else {
-    bodyEl = h("pre.codebox.empty", null, t("detail.bodyEmpty"));
-  }
-
-  return h(
-    "div",
-    null,
-    h(
-      "div.section",
-      null,
-      h("div.section-head", null, h("h3", null, t("detail.body")), kindBadge),
-      bodyEl,
-    ),
-  );
 }
 
 function kv(label: string, value: string): HTMLElement {

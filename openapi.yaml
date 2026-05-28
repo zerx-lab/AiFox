@@ -11,6 +11,8 @@ components:
         kind:
           description: Analyzer that produced this view
           type: string
+        normalized:
+          $ref: "#/components/schemas/NormalizedRequest"
         warnings:
           items:
             type: string
@@ -175,6 +177,60 @@ components:
           format: int64
           type: integer
       type: object
+    Breakpoint:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Breakpoint.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          type: boolean
+        id:
+          type: string
+        match:
+          description: How the pattern is matched.
+          enum:
+            - endpoint
+            - path
+          type: string
+        pattern:
+          description: Match pattern, e.g. "POST /v1/messages" or "/v1/messages".
+          type: string
+      required:
+        - id
+        - match
+        - pattern
+        - enabled
+      type: object
+    CreateBreakpointInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CreateBreakpointInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          type: boolean
+        match:
+          enum:
+            - endpoint
+            - path
+          type: string
+        pattern:
+          minLength: 1
+          type: string
+      required:
+        - match
+        - pattern
+        - enabled
+      type: object
     ErrorDetail:
       additionalProperties: false
       properties:
@@ -268,6 +324,51 @@ components:
         - status
         - time
       type: object
+    ListBreakpointsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListBreakpointsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/Breakpoint"
+          type:
+            - array
+            - "null"
+        paused:
+          items:
+            $ref: "#/components/schemas/Paused"
+          type:
+            - array
+            - "null"
+      required:
+        - items
+        - paused
+      type: object
+    ListSessionsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListSessionsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/SessionSummaryBody"
+          type:
+            - array
+            - "null"
+      required:
+        - items
+      type: object
     ListTrafficOutputBody:
       additionalProperties: false
       properties:
@@ -286,6 +387,56 @@ components:
             - "null"
       required:
         - items
+      type: object
+    NormalizedMessage:
+      additionalProperties: false
+      properties:
+        fingerprint:
+          type: string
+        role:
+          type: string
+      required:
+        - role
+        - fingerprint
+      type: object
+    NormalizedRequest:
+      additionalProperties: false
+      properties:
+        messages:
+          items:
+            $ref: "#/components/schemas/NormalizedMessage"
+          type:
+            - array
+            - "null"
+        model:
+          type: string
+        provider:
+          type: string
+        system:
+          type: string
+      required:
+        - provider
+      type: object
+    Paused:
+      additionalProperties: false
+      properties:
+        breakpointId:
+          type: string
+        entryId:
+          type: string
+        method:
+          type: string
+        pausedAt:
+          format: date-time
+          type: string
+        url:
+          type: string
+      required:
+        - entryId
+        - breakpointId
+        - method
+        - url
+        - pausedAt
       type: object
     ProxyInfoOutputBody:
       additionalProperties: false
@@ -319,6 +470,141 @@ components:
         - port
         - configured
         - enabled
+      type: object
+    ReplayInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ReplayInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        overrides:
+          $ref: "#/components/schemas/ReplayOverridesBody"
+      required:
+        - overrides
+      type: object
+    ReplayOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ReplayOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        entryId:
+          description: ID of the newly captured entry.
+          type: string
+      required:
+        - entryId
+      type: object
+    ReplayOverridesBody:
+      additionalProperties: false
+      properties:
+        maxTokens:
+          description: Override max output tokens.
+          format: int64
+          type: integer
+        model:
+          description: Override the upstream model identifier.
+          type: string
+        stream:
+          description: Force streaming on / off.
+          type: boolean
+        temperature:
+          description: Override sampling temperature.
+          format: double
+          type: number
+        topK:
+          description: Override top-k sampling.
+          format: int64
+          type: integer
+        topP:
+          description: Override nucleus sampling threshold.
+          format: double
+          type: number
+      type: object
+    SessionSummaryBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/SessionSummaryBody.json
+          format: uri
+          readOnly: true
+          type: string
+        cacheCreate:
+          format: int64
+          type: integer
+        cacheRead:
+          format: int64
+          type: integer
+        entryIds:
+          description: Captured traffic entries belonging to this session, oldest first.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        fingerprint:
+          description: Hash of the conversation anchor.
+          type: string
+        hasError:
+          type: boolean
+        hasStreaming:
+          type: boolean
+        hasUnfinished:
+          type: boolean
+        id:
+          description: Opaque session ID.
+          type: string
+        inputTokens:
+          format: int64
+          type: integer
+        lastAt:
+          format: date-time
+          type: string
+        model:
+          type: string
+        outputTokens:
+          format: int64
+          type: integer
+        provider:
+          description: anthropic | openai | gemini
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        status:
+          enum:
+            - active
+            - completed
+            - failed
+          type: string
+        turnCount:
+          format: int64
+          type: integer
+      required:
+        - id
+        - fingerprint
+        - provider
+        - entryIds
+        - startedAt
+        - lastAt
+        - turnCount
+        - inputTokens
+        - outputTokens
+        - cacheRead
+        - cacheCreate
+        - status
+        - hasError
+        - hasStreaming
+        - hasUnfinished
       type: object
     SetProxyEnabledInputBody:
       additionalProperties: false
@@ -424,6 +710,8 @@ components:
           type: string
         method:
           type: string
+        replayedFromId:
+          type: string
         requestBody:
           type: string
         requestHeaders:
@@ -442,6 +730,8 @@ components:
         responseSize:
           format: int64
           type: integer
+        sessionId:
+          type: string
         startedAt:
           format: date-time
           type: string
@@ -474,6 +764,21 @@ components:
         - streaming
         - truncated
       type: object
+    UpdateBreakpointInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UpdateBreakpointInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          type: boolean
+      required:
+        - enabled
+      type: object
 info:
   description: HTTP API exposed by the Go backend to the Electron renderer.
   title: Ai-fox API
@@ -500,6 +805,142 @@ paths:
       summary: Health probe
       tags:
         - system
+  /v1/breakpoints:
+    get:
+      operationId: list-breakpoints
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListBreakpointsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List configured breakpoints and currently-paused requests.
+      tags:
+        - breakpoints
+    post:
+      operationId: create-breakpoint
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBreakpointInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Breakpoint"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Add a breakpoint.
+      tags:
+        - breakpoints
+  /v1/breakpoints/paused/{entryId}/abort:
+    post:
+      operationId: abort-paused
+      parameters:
+        - in: path
+          name: entryId
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Drop a paused request — client receives 503.
+      tags:
+        - breakpoints
+  /v1/breakpoints/paused/{entryId}/continue:
+    post:
+      operationId: continue-paused
+      parameters:
+        - in: path
+          name: entryId
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Resume a paused request — forward it upstream.
+      tags:
+        - breakpoints
+  /v1/breakpoints/{id}:
+    delete:
+      operationId: delete-breakpoint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Delete a breakpoint (and continue any held request).
+      tags:
+        - breakpoints
+    put:
+      operationId: update-breakpoint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBreakpointInputBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Enable / disable a breakpoint.
+      tags:
+        - breakpoints
   /v1/proxy:
     get:
       operationId: get-proxy-info
@@ -543,6 +984,51 @@ paths:
       summary: Start or stop the proxy listener
       tags:
         - proxy
+  /v1/sessions:
+    get:
+      operationId: list-sessions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSessionsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List aggregated sessions, newest first.
+      tags:
+        - sessions
+  /v1/sessions/{id}:
+    get:
+      operationId: get-session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionSummaryBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Fetch one session by id.
+      tags:
+        - sessions
   /v1/settings:
     get:
       operationId: get-settings
@@ -658,5 +1144,37 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Fetch a single captured entry by id
+      tags:
+        - traffic
+  /v1/traffic/{id}/replay:
+    post:
+      operationId: replay-entry
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Re-issue a captured request with optional overrides.
       tags:
         - traffic

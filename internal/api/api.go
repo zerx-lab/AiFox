@@ -20,6 +20,7 @@ import (
 
 	"github.com/zerx-lab/ai-fox/internal/config"
 	"github.com/zerx-lab/ai-fox/internal/llmparse"
+	"github.com/zerx-lab/ai-fox/internal/session"
 	"github.com/zerx-lab/ai-fox/internal/store"
 )
 
@@ -33,11 +34,31 @@ type ProxyController interface {
 	SetPort(int) error
 }
 
+// ReplayOverrides mirrors proxy.ReplayOverrides on the API boundary. Same
+// pointer-as-tristate convention.
+type ReplayOverrides struct {
+	Model       *string
+	Temperature *float64
+	TopP        *float64
+	TopK        *int
+	MaxTokens   *int
+	Stream      *bool
+}
+
+// Replayer is the optional surface a controller may expose. Build wires it
+// in when available; if absent, the replay endpoint reports 503.
+type Replayer interface {
+	Replay(ctx context.Context, originalID string, overrides ReplayOverrides) (string, error)
+}
+
 // Deps groups the runtime collaborators handlers need. Wired in main.
 type Deps struct {
-	Config  *config.Store
-	Traffic *store.Store
-	Proxy   ProxyController
+	Config      *config.Store
+	Traffic     *store.Store
+	Proxy       ProxyController
+	Replay      Replayer
+	Breakpoints BreakpointController
+	Sessions    *session.Aggregator
 }
 
 // Register wires every operation onto the provided Huma API.
@@ -109,7 +130,10 @@ func Register(api huma.API, deps Deps) {
 		DefaultStatus: http.StatusNoContent,
 	}, clearTrafficHandler(deps.Traffic))
 
-	registerTrafficStream(api, deps.Traffic)
+	registerTrafficStream(api, deps.Traffic, deps.Sessions, deps.Breakpoints)
+	registerSessions(api, deps.Sessions)
+	registerReplay(api, deps.Replay)
+	registerBreakpoints(api, deps.Breakpoints)
 }
 
 // --- health ---
@@ -312,6 +336,8 @@ type TrafficEntry struct {
 	Streaming       bool               `json:"streaming"`
 	Truncated       bool               `json:"truncated"`
 	Error           string             `json:"error,omitempty"`
+	SessionID       string             `json:"sessionId,omitempty"`
+	ReplayedFromID  string             `json:"replayedFromId,omitempty"`
 	Analysis        *llmparse.Analysis `json:"analysis,omitempty"`
 }
 
@@ -334,6 +360,8 @@ func toWire(e *store.Entry) TrafficEntry {
 		Streaming:       e.Streaming,
 		Truncated:       e.Truncated,
 		Error:           e.Error,
+		SessionID:       e.SessionID,
+		ReplayedFromID:  e.ReplayedFromID,
 	}
 	if a, ok := e.Analysis.(*llmparse.Analysis); ok {
 		out.Analysis = a
@@ -394,7 +422,7 @@ func clearTrafficHandler(st *store.Store) func(context.Context, *struct{}) (*str
 // The wrapper here exists only so the operation shows up in OpenAPI as an
 // event-stream response, which is enough for the user-facing API reference.
 
-func registerTrafficStream(api huma.API, st *store.Store) {
+func registerTrafficStream(api huma.API, st *store.Store, agg *session.Aggregator, bp BreakpointController) {
 	op := huma.Operation{
 		OperationID: "stream-traffic",
 		Method:      http.MethodGet,
@@ -405,16 +433,17 @@ func registerTrafficStream(api huma.API, st *store.Store) {
 	huma.Register(api, op, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 		return &huma.StreamResponse{
 			Body: func(streamCtx huma.Context) {
-				writeTrafficStream(streamCtx, st)
+				writeTrafficStream(streamCtx, st, agg, bp)
 			},
 		}, nil
 	})
 }
 
-// writeTrafficStream pushes an event each time the store sees a new or
-// updated entry. The first event ("snapshot") replays the current buffer so
-// the renderer can render an initial list without a separate fetch.
-func writeTrafficStream(ctx huma.Context, st *store.Store) {
+// writeTrafficStream pushes events as the store/aggregator emit updates.
+// The first event ("snapshot") replays the current buffer (and current
+// sessions, if a session aggregator is wired in) so the renderer can boot
+// without a separate fetch.
+func writeTrafficStream(ctx huma.Context, st *store.Store, agg *session.Aggregator, bp BreakpointController) {
 	ctx.SetHeader("Content-Type", "text/event-stream")
 	ctx.SetHeader("Cache-Control", "no-cache")
 	ctx.SetHeader("Connection", "keep-alive")
@@ -438,14 +467,51 @@ func writeTrafficStream(ctx huma.Context, st *store.Store) {
 	// Initial snapshot — newest first to match the list endpoint.
 	snap := make([]TrafficEntry, 0)
 	for _, e := range st.List() {
-		snap = append(snap, toWire(e))
+		// Attach session id at wire time so the renderer doesn't need a
+		// second lookup. The aggregator is the authoritative source.
+		entry := toWire(e)
+		if agg != nil && entry.SessionID == "" {
+			entry.SessionID = agg.SessionOf(entry.ID)
+		}
+		snap = append(snap, entry)
 	}
 	if !send("snapshot", snap) {
 		return
 	}
 
+	if agg != nil {
+		sessions := make([]SessionSummaryBody, 0)
+		for _, s := range agg.List() {
+			sessions = append(sessions, toSessionBody(s))
+		}
+		if !send("sessions", sessions) {
+			return
+		}
+	}
+
 	ch, cancel := st.Subscribe()
 	defer cancel()
+
+	var sessCh <-chan struct{}
+	var sessCancel func()
+	if agg != nil {
+		sessCh, sessCancel = agg.Subscribe()
+		defer sessCancel()
+	}
+
+	var bpCh <-chan struct{}
+	var bpCancel func()
+	if bp != nil {
+		bpCh, bpCancel = bp.Subscribe()
+		defer bpCancel()
+		// Initial breakpoints snapshot for fast UI bootstrap.
+		if !send("breakpoints", map[string]any{
+			"items":  bp.List(),
+			"paused": bp.PausedSnapshot(),
+		}) {
+			return
+		}
+	}
 
 	clientGone := ctx.Context().Done()
 	keepalive := time.NewTicker(15 * time.Second)
@@ -457,7 +523,34 @@ func writeTrafficStream(ctx huma.Context, st *store.Store) {
 			if !ok {
 				return
 			}
-			if !send("entry", toWire(e)) {
+			entry := toWire(e)
+			if agg != nil && entry.SessionID == "" {
+				entry.SessionID = agg.SessionOf(entry.ID)
+			}
+			if !send("entry", entry) {
+				return
+			}
+		case _, ok := <-sessCh:
+			if !ok {
+				sessCh = nil
+				continue
+			}
+			sessions := make([]SessionSummaryBody, 0)
+			for _, s := range agg.List() {
+				sessions = append(sessions, toSessionBody(s))
+			}
+			if !send("sessions", sessions) {
+				return
+			}
+		case _, ok := <-bpCh:
+			if !ok {
+				bpCh = nil
+				continue
+			}
+			if !send("breakpoints", map[string]any{
+				"items":  bp.List(),
+				"paused": bp.PausedSnapshot(),
+			}) {
 				return
 			}
 		case <-keepalive.C:

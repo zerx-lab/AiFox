@@ -8,13 +8,17 @@
 
 import type { components } from "../../api/client";
 import { t } from "../i18n";
+import { renderCallStack } from "./callstack";
 import { h } from "./dom";
 import { fmtDuration } from "./format";
 import { highlight } from "./highlight";
+import { renderReplayPopover } from "./replay";
 import {
+  type CenterView,
   getState,
   selectMessage,
   selectToolUse,
+  setCenterView,
   type TrafficEntry,
 } from "./state";
 
@@ -34,6 +38,7 @@ export function renderTimeline(): HTMLElement {
     return h(
       "div.timeline",
       null,
+      viewSwitcher(state.centerView),
       h(
         "div.tl-empty",
         null,
@@ -46,14 +51,41 @@ export function renderTimeline(): HTMLElement {
 
   const root = h("div.timeline");
   root.appendChild(renderHeader(entry));
+  root.appendChild(viewSwitcher(state.centerView));
 
-  const analysis = entry.analysis as Analysis | undefined;
-  if (analysis?.anthropic) {
-    root.appendChild(renderAnthropic(analysis.anthropic, analysis.warnings ?? []));
+  if (state.centerView === "stack") {
+    root.appendChild(renderCallStack(entry));
   } else {
-    root.appendChild(renderGeneric(entry, analysis));
+    const analysis = entry.analysis as Analysis | undefined;
+    if (analysis?.anthropic) {
+      root.appendChild(renderAnthropic(analysis.anthropic, analysis.warnings ?? []));
+    } else {
+      root.appendChild(renderGeneric(entry, analysis));
+    }
   }
+  const popover = renderReplayPopover();
+  if (popover) root.appendChild(popover);
   return root;
+}
+
+function viewSwitcher(active: CenterView): HTMLElement {
+  return h(
+    "div.center-view-switch",
+    null,
+    viewBtn("timeline", t("centerView.timeline"), active),
+    viewBtn("stack", t("centerView.stack"), active),
+  );
+}
+
+function viewBtn(view: CenterView, label: string, active: CenterView): HTMLElement {
+  return h(
+    "button",
+    {
+      class: active === view ? "active" : "",
+      onclick: () => setCenterView(view),
+    },
+    label,
+  );
 }
 
 function renderHeader(entry: TrafficEntry): HTMLElement {

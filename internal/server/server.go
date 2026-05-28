@@ -18,8 +18,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"context"
+
 	"github.com/zerx-lab/ai-fox/internal/api"
 	"github.com/zerx-lab/ai-fox/internal/config"
+	"github.com/zerx-lab/ai-fox/internal/proxy"
+	"github.com/zerx-lab/ai-fox/internal/session"
 	"github.com/zerx-lab/ai-fox/internal/store"
 )
 
@@ -49,6 +53,9 @@ type Config struct {
 	// when nil the proxy info endpoint reports stopped + empty address and
 	// PUT /v1/proxy returns 500.
 	Proxy api.ProxyController
+	// Sessions, when set, exposes session-aggregation rollups via the
+	// /v1/sessions endpoints and broadcasts session updates over SSE.
+	Sessions *session.Aggregator
 }
 
 // Built is the result of Build. It exposes everything the caller needs to
@@ -103,10 +110,20 @@ func Build(cfg Config) (*Built, error) {
 	// Auth middleware: reject any request missing the handshake token.
 	humaAPI.UseMiddleware(authMiddleware(token))
 
+	var replayer api.Replayer
+	var breakpoints api.BreakpointController
+	if pc, ok := cfg.Proxy.(*proxy.Controller); ok && pc != nil {
+		replayer = replayAdapter{c: pc}
+		breakpoints = breakpointAdapter{r: pc.Breakpoints()}
+	}
+
 	api.Register(humaAPI, api.Deps{
-		Config:  settings,
-		Traffic: traffic,
-		Proxy:   cfg.Proxy,
+		Config:      settings,
+		Traffic:     traffic,
+		Proxy:       cfg.Proxy,
+		Replay:      replayer,
+		Breakpoints: breakpoints,
+		Sessions:    cfg.Sessions,
 	})
 
 	return &Built{
@@ -155,6 +172,87 @@ func authMiddleware(token string) func(huma.Context, func(huma.Context)) {
 		}
 		next(ctx)
 	}
+}
+
+// replayAdapter bridges the api.Replayer interface (defined in package api
+// to avoid an import cycle) and the concrete proxy.Controller. Field-by-field
+// translation between api.ReplayOverrides and proxy.ReplayOverrides.
+type replayAdapter struct{ c *proxy.Controller }
+
+func (a replayAdapter) Replay(ctx context.Context, originalID string, o api.ReplayOverrides) (string, error) {
+	return a.c.Replay(ctx, originalID, proxy.ReplayOverrides{
+		Model:       o.Model,
+		Temperature: o.Temperature,
+		TopP:        o.TopP,
+		TopK:        o.TopK,
+		MaxTokens:   o.MaxTokens,
+		Stream:      o.Stream,
+	})
+}
+
+// breakpointAdapter bridges api.BreakpointController and proxy.Registry.
+// Same pattern as replayAdapter: api owns the interface, server bridges to
+// the concrete proxy.Registry.
+type breakpointAdapter struct{ r *proxy.Registry }
+
+func (a breakpointAdapter) List() []api.Breakpoint {
+	in := a.r.List()
+	out := make([]api.Breakpoint, len(in))
+	for i, bp := range in {
+		out[i] = api.Breakpoint{
+			ID:      bp.ID,
+			Match:   string(bp.Match),
+			Pattern: bp.Pattern,
+			Enabled: bp.Enabled,
+		}
+	}
+	return out
+}
+
+func (a breakpointAdapter) Add(in api.Breakpoint) (api.Breakpoint, error) {
+	created, err := a.r.Add(proxy.Breakpoint{
+		Match:   proxy.MatchKind(in.Match),
+		Pattern: in.Pattern,
+		Enabled: in.Enabled,
+	})
+	if err != nil {
+		return api.Breakpoint{}, err
+	}
+	return api.Breakpoint{
+		ID:      created.ID,
+		Match:   string(created.Match),
+		Pattern: created.Pattern,
+		Enabled: created.Enabled,
+	}, nil
+}
+
+func (a breakpointAdapter) Update(id string, enabled bool) error {
+	return a.r.Update(id, enabled)
+}
+
+func (a breakpointAdapter) Delete(id string) {
+	a.r.Delete(id)
+}
+
+func (a breakpointAdapter) PausedSnapshot() []api.Paused {
+	in := a.r.PausedSnapshot()
+	out := make([]api.Paused, len(in))
+	for i, p := range in {
+		out[i] = api.Paused{
+			EntryID:      p.EntryID,
+			BreakpointID: p.BreakpointID,
+			Method:       p.Method,
+			URL:          p.URL,
+			PausedAt:     p.PausedAt,
+		}
+	}
+	return out
+}
+
+func (a breakpointAdapter) Continue(entryID string) error { return a.r.Continue(entryID) }
+func (a breakpointAdapter) Abort(entryID string) error    { return a.r.Abort(entryID) }
+func (a breakpointAdapter) Subscribe() (<-chan struct{}, func()) {
+	return a.r.Subscribe()
 }
 
 func randomToken(nBytes int) (string, error) {

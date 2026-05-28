@@ -6,9 +6,14 @@ import { setLanguage } from "./i18n";
 import { mountApp } from "./ui/app";
 import { openSse } from "./ui/sse";
 import {
+  type Breakpoint,
+  type PausedRequest,
+  replaceBreakpoints,
   replaceEntries,
+  replaceSessions,
   setState,
   upsertEntry,
+  type SessionSummary,
   type TrafficEntry,
 } from "./ui/state";
 import { initTheme, setTheme, type ThemeChoice } from "./ui/theme";
@@ -67,6 +72,15 @@ async function bootstrap() {
     } else if (ev.event === "entry") {
       const entry = JSON.parse(ev.data) as TrafficEntry;
       upsertEntry(entry);
+    } else if (ev.event === "sessions") {
+      const items = JSON.parse(ev.data) as SessionSummary[];
+      replaceSessions(items);
+    } else if (ev.event === "breakpoints") {
+      const payload = JSON.parse(ev.data) as {
+        items: Breakpoint[];
+        paused: PausedRequest[];
+      };
+      replaceBreakpoints(payload.items ?? [], payload.paused ?? []);
     }
   });
 }

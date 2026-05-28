@@ -5,6 +5,7 @@
 import { getClient } from "../../api/client";
 import { setLanguage, supportedLanguages, t } from "../i18n";
 import { h } from "./dom";
+import { customSelect } from "./select";
 import { getState, setState, type HeaderKV, type Settings } from "./state";
 import { setTheme, type ThemeChoice } from "./theme";
 
@@ -286,15 +287,12 @@ function selectField(opts: {
   options: ReadonlyArray<[string, string]>;
   onchange: (v: string) => void;
 }): HTMLElement {
-  const sel = document.createElement("select");
-  for (const [val, label] of opts.options) {
-    const opt = document.createElement("option");
-    opt.value = val;
-    opt.textContent = label;
-    if (val === opts.value) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  sel.addEventListener("change", () => opts.onchange(sel.value));
+  const sel = customSelect({
+    value: opts.value,
+    options: opts.options.map(([value, label]) => ({ value, label })),
+    onChange: (v) => opts.onchange(v),
+    className: "cselect-field",
+  });
   return h(
     "div.field",
     null,

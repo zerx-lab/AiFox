@@ -23,6 +23,7 @@ import (
 	"github.com/zerx-lab/ai-fox/internal/config"
 	"github.com/zerx-lab/ai-fox/internal/proxy"
 	"github.com/zerx-lab/ai-fox/internal/server"
+	"github.com/zerx-lab/ai-fox/internal/session"
 	"github.com/zerx-lab/ai-fox/internal/store"
 )
 
@@ -68,10 +69,14 @@ func runServer() error {
 		}
 	}
 
+	aggregator := session.New(traffic)
+	_ = aggregator.Start()
+
 	built, err := server.Build(server.Config{
 		Settings: settings,
 		Traffic:  traffic,
 		Proxy:    ctrl,
+		Sessions: aggregator,
 	})
 	if err != nil {
 		return err
@@ -107,10 +112,20 @@ func dumpOpenAPI(path string) error {
 		return err
 	}
 
+	// Pass an unstarted aggregator and an unstarted proxy controller so
+	// optional session / replay endpoints make it into the schema. Neither
+	// is started here; both are throwaways.
+	traffic := store.New(1)
+	ctrl, err := proxy.NewController(0, cfg, traffic)
+	if err != nil {
+		return err
+	}
 	built, err := server.Build(server.Config{
 		Token:    "dump",
 		Settings: cfg,
-		Traffic:  store.New(1),
+		Traffic:  traffic,
+		Proxy:    ctrl,
+		Sessions: session.New(traffic),
 	})
 	if err != nil {
 		return err

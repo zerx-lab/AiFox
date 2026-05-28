@@ -24,6 +24,9 @@ func Analyze(in Input) *Analysis {
 	if isAnthropicMessages(in) {
 		return analyzeAnthropicMessages(in)
 	}
+	if isOpenAIChat(in) {
+		return analyzeOpenAIChat(in)
+	}
 	return nil
 }
 
@@ -53,6 +56,7 @@ func analyzeAnthropicMessages(in Input) *Analysis {
 	if req, warnings := parseAnthropicRequest(in.RequestBody); req != nil {
 		out.Anthropic.Request = req
 		out.Warnings = append(out.Warnings, warnings...)
+		out.Normalized = anthropicToNormalized(req)
 	} else if in.RequestBody != "" {
 		out.Warnings = append(out.Warnings, "request body is not valid JSON")
 	}

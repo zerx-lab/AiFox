@@ -3,8 +3,10 @@
 // for the data volumes we deal with (a few hundred entries max).
 
 import { onLanguageChange } from "../i18n";
+import { renderBottomPane } from "./bottom-pane";
 import { renderDetail } from "./detail";
 import { h, mount } from "./dom";
+import { renderFilterPills } from "./filter";
 import { renderSettings } from "./settings";
 import { renderSidebar } from "./sidebar";
 import { renderStatusbar } from "./statusbar";
@@ -27,7 +29,13 @@ export function mountApp(root: HTMLElement) {
   onLanguageChange(render);
 }
 
-const SCROLL_SELECTORS = [".side-list", ".tl-body", ".tl-generic", ".detail-body"] as const;
+const SCROLL_SELECTORS = [
+  ".side-list",
+  ".tl-body",
+  ".tl-generic",
+  ".detail-body",
+  ".bottom-body",
+] as const;
 
 function snapshotScrolls(root: HTMLElement): Record<string, number> {
   const out: Record<string, number> = {};
@@ -49,7 +57,7 @@ function restoreScrolls(root: HTMLElement, scrolls: Record<string, number>) {
 function renderShell(): HTMLElement {
   const state = getState();
   const isMac = state.env?.platform === "darwin";
-  return h(
+  const shell = h(
     "div",
     { class: `app${isMac ? " app-mac" : " app-frameless"}` },
     renderTitlebar(),
@@ -61,14 +69,26 @@ function renderShell(): HTMLElement {
     ),
     renderStatusbar(),
   );
+  // Drive the bottom-pane height from state so the user's resize sticks
+  // across re-renders.
+  const h2 = state.bottomCollapsed ? 0 : state.bottomHeight;
+  shell.style.setProperty("--bottom-h", `${h2}px`);
+  return shell;
 }
 
 function renderTrafficView(): HTMLElement {
+  const center = h(
+    "div.center-stack",
+    null,
+    renderFilterPills(),
+    renderTimeline(),
+    renderBottomPane(),
+  );
   return h(
     "div.view-traffic",
     null,
     renderSidebar(),
-    renderTimeline(),
+    center,
     renderDetail(),
   );
 }

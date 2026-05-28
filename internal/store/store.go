@@ -49,6 +49,13 @@ type Entry struct {
 	Truncated       bool              `json:"truncated"`
 	Error           string            `json:"error,omitempty"`
 	Analysis        any               `json:"analysis,omitempty"`
+	// SessionID is set by the session.Aggregator when this entry is folded
+	// into a session. Optional; entries from unrecognized providers stay
+	// "". The store itself never reads this field.
+	SessionID string `json:"sessionId,omitempty"`
+	// ReplayedFromID, when non-empty, points to the entry this one was
+	// re-issued from via the replay API. The store treats it as opaque.
+	ReplayedFromID string `json:"replayedFromId,omitempty"`
 }
 
 // MaxBodyBytes caps the per-direction body size we keep in memory.

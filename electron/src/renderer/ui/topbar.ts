@@ -1,12 +1,12 @@
-// Top bar: brand, proxy endpoint chip, proxy on/off toggle, view tabs,
-// theme + language selectors. Sits below the titlebar so the drag region
-// stays clean.
+// Top bar: proxy endpoint chip + proxy on/off toggle.
+// View navigation lives in the statusbar (settings cog) and theme / language
+// toggles live in the titlebar (icon-only), so the topbar stays focused on
+// the proxy state — the thing the user actually interacts with constantly.
 
 import { getClient } from "../../api/client";
-import { getLanguage, setLanguage, supportedLanguages, t } from "../i18n";
+import { t } from "../i18n";
 import { h } from "./dom";
-import { getState, setState, type Settings } from "./state";
-import { setTheme, type ThemeChoice } from "./theme";
+import { getState, setReplayOpen, setState } from "./state";
 
 export function renderTopbar(): HTMLElement {
   const state = getState();
@@ -65,33 +65,16 @@ export function renderTopbar(): HTMLElement {
     h("span", null, proxyEnabled ? t("topbar.proxyOn") : t("topbar.proxyOff")),
   );
 
-  const nav = h(
-    "div.nav",
-    null,
-    navButton("traffic", t("nav.traffic")),
-    navButton("settings", t("nav.settings")),
-  );
-
-  const themeSelect = makeSelect(
-    state.settings?.theme ?? "",
-    [
-      ["", t("topbar.themeSystem")],
-      ["dark", t("topbar.themeDark")],
-      ["light", t("topbar.themeLight")],
-    ],
-    async (val) => {
-      setTheme(val as ThemeChoice);
-      await persistSetting({ theme: val as Settings["theme"] });
+  const replayBtn = h(
+    "button",
+    {
+      class: `topbar-action${state.replayOpen ? " active" : ""}`,
+      disabled: !state.selectedId,
+      title: t("replay.button"),
+      onclick: () => setReplayOpen(!state.replayOpen),
     },
-  );
-
-  const langSelect = makeSelect(
-    getLanguage(),
-    supportedLanguages().map((c) => [c, c === "en" ? "English" : "中文"]),
-    async (val) => {
-      setLanguage(val as never);
-      await persistSetting({ language: val as Settings["language"] });
-    },
+    h("span", null, "↻"),
+    h("span", null, t("replay.button")),
   );
 
   return h(
@@ -100,51 +83,8 @@ export function renderTopbar(): HTMLElement {
     proxyChip,
     proxyToggle,
     h("span.topbar-spacer"),
-    nav,
-    themeSelect,
-    langSelect,
+    replayBtn,
   );
-}
-
-function navButton(view: "traffic" | "settings", label: string): HTMLElement {
-  const state = getState();
-  return h(
-    "button",
-    {
-      class: state.view === view ? "active" : "",
-      onclick: () => setState({ view }),
-    },
-    label,
-  );
-}
-
-function makeSelect(
-  value: string,
-  options: readonly (readonly [string, string])[],
-  onchange: (v: string) => void | Promise<void>,
-): HTMLSelectElement {
-  const sel = document.createElement("select");
-  sel.className = "topbar-select";
-  for (const [val, label] of options) {
-    const opt = document.createElement("option");
-    opt.value = val;
-    opt.textContent = label;
-    if (val === value) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  sel.addEventListener("change", () => {
-    void onchange(sel.value);
-  });
-  return sel;
-}
-
-async function persistSetting(patch: Partial<Settings>) {
-  const client = await getClient();
-  const current = getState().settings;
-  if (!current) return;
-  const next: Settings = { ...current, ...patch };
-  const { data } = await client.PUT("/v1/settings", { body: next });
-  setState({ settings: data ?? next });
 }
 
 function flashCopied(btn: HTMLElement) {

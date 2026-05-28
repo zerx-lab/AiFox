@@ -8,10 +8,37 @@ export type TrafficEntry = components["schemas"]["TrafficEntry"];
 export type Settings = components["schemas"]["SettingsBody"];
 export type ProxyInfo = components["schemas"]["ProxyInfoOutputBody"];
 export type HeaderKV = components["schemas"]["HeaderKVBody"];
+export type SessionSummary = components["schemas"]["SessionSummaryBody"];
+export type Breakpoint = components["schemas"]["Breakpoint"];
+export type PausedRequest = components["schemas"]["Paused"];
 
 export type View = "traffic" | "settings";
 
-export type DetailTab = "overview" | "tool" | "headers" | "request" | "response";
+export type DetailTab =
+  | "overview"
+  | "cache"
+  | "tokens"
+  | "tools"
+  | "headers"
+  | "request"
+  | "response";
+
+export type CacheStyle = "segmented" | "heatmap" | "blame";
+
+export type BottomTab = "console" | "variables" | "problems" | "breakpoints";
+
+export type CenterView = "timeline" | "stack";
+
+export interface TrafficFilter {
+  /** Free-text filter applied to method/url/status. */
+  text: string;
+  /** Show only streaming entries when true. */
+  streaming: boolean;
+  /** Show only errors (4xx/5xx/proxy error) when true. */
+  errors: boolean;
+  /** Match a model name exactly; empty = no filter. */
+  model: string;
+}
 
 export interface Selection {
   /** Which message card is highlighted in the center timeline.
@@ -25,10 +52,22 @@ export interface Selection {
 export interface AppState {
   view: View;
   entries: TrafficEntry[];
+  sessions: SessionSummary[];
+  selectedSessionId: string | null;
   selectedId: string | null;
   selection: Selection;
   detailTab: DetailTab;
+  cacheStyle: CacheStyle;
+  bottomTab: BottomTab;
+  bottomCollapsed: boolean;
+  bottomHeight: number;
+  centerView: CenterView;
   filter: string;
+  filters: TrafficFilter;
+  collapsedGroups: Set<string>;
+  replayOpen: boolean;
+  breakpoints: Breakpoint[];
+  pausedRequests: PausedRequest[];
   proxy: ProxyInfo | null;
   settings: Settings | null;
   env: Env | null;
@@ -40,10 +79,22 @@ type Listener = (s: AppState) => void;
 const state: AppState = {
   view: "traffic",
   entries: [],
+  sessions: [],
+  selectedSessionId: null,
   selectedId: null,
   selection: { messageKey: null, toolUseId: null },
   detailTab: "overview",
+  cacheStyle: "segmented",
+  bottomTab: "console",
+  bottomCollapsed: false,
+  bottomHeight: 200,
+  centerView: "timeline",
   filter: "",
+  filters: { text: "", streaming: false, errors: false, model: "" },
+  collapsedGroups: new Set<string>(),
+  replayOpen: false,
+  breakpoints: [],
+  pausedRequests: [],
   proxy: null,
   settings: null,
   env: null,
@@ -75,12 +126,54 @@ export function selectMessage(messageKey: string | null) {
 
 export function selectToolUse(messageKey: string, toolUseId: string) {
   state.selection = { messageKey, toolUseId };
-  state.detailTab = "tool";
+  state.detailTab = "tools";
   notify();
 }
 
 export function setDetailTab(tab: DetailTab) {
   state.detailTab = tab;
+  notify();
+}
+
+export function setCacheStyle(style: CacheStyle) {
+  state.cacheStyle = style;
+  notify();
+}
+
+export function setBottomTab(tab: BottomTab) {
+  state.bottomTab = tab;
+  if (state.bottomCollapsed) state.bottomCollapsed = false;
+  notify();
+}
+
+export function toggleBottomCollapsed() {
+  state.bottomCollapsed = !state.bottomCollapsed;
+  notify();
+}
+
+export function setBottomHeight(px: number) {
+  state.bottomHeight = Math.max(80, Math.min(600, Math.round(px)));
+  notify();
+}
+
+export function setFilters(patch: Partial<TrafficFilter>) {
+  state.filters = { ...state.filters, ...patch };
+  notify();
+}
+
+export function toggleGroupCollapsed(key: string) {
+  if (state.collapsedGroups.has(key)) state.collapsedGroups.delete(key);
+  else state.collapsedGroups.add(key);
+  notify();
+}
+
+export function setCenterView(view: CenterView) {
+  state.centerView = view;
+  notify();
+}
+
+export function setReplayOpen(open: boolean) {
+  state.replayOpen = open;
   notify();
 }
 
@@ -115,9 +208,43 @@ function autoPickEntry(entries: TrafficEntry[]): string | null {
 
 export function clearEntries() {
   state.entries = [];
+  state.sessions = [];
+  state.selectedSessionId = null;
   state.selectedId = null;
   state.selection = { messageKey: null, toolUseId: null };
   state.detailTab = "overview";
+  notify();
+}
+
+export function replaceSessions(items: SessionSummary[]) {
+  state.sessions = [...items];
+  // If our currently selected session vanished (cleared on the server), drop
+  // the selection so the sidebar doesn't keep a stale highlight.
+  if (state.selectedSessionId && !items.some((s) => s.id === state.selectedSessionId)) {
+    state.selectedSessionId = null;
+  }
+  notify();
+}
+
+export function replaceBreakpoints(items: Breakpoint[], paused: PausedRequest[]) {
+  state.breakpoints = [...items];
+  state.pausedRequests = [...paused];
+  notify();
+}
+
+export function selectSession(id: string | null) {
+  state.selectedSessionId = id;
+  // Default to the latest entry of the session so the right pane has
+  // something to display immediately.
+  if (id) {
+    const s = state.sessions.find((x) => x.id === id);
+    const lastEntryId = s?.entryIds?.[s.entryIds.length - 1];
+    if (lastEntryId && lastEntryId !== state.selectedId) {
+      state.selectedId = lastEntryId;
+      state.selection = { messageKey: null, toolUseId: null };
+      state.detailTab = "overview";
+    }
+  }
   notify();
 }
 

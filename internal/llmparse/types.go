@@ -33,6 +33,10 @@ type Analysis struct {
 	Endpoint string `json:"endpoint" doc:"Human-readable endpoint label"`
 	// Anthropic carries the parsed Messages-API view when Kind == anthropic.messages.
 	Anthropic *AnthropicAnalysis `json:"anthropic,omitempty"`
+	// Normalized is the provider-neutral projection used by session
+	// aggregation. Every analyzer should populate this — it's what enables
+	// the UI to group requests across providers under a single session.
+	Normalized *NormalizedRequest `json:"normalized,omitempty"`
 	// Warnings collects soft parse failures: missing fields, unknown event
 	// types, JSON that didn't deserialize as expected. Always safe to show
 	// to the user — they're not blocking errors.

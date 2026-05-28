@@ -32,8 +32,9 @@ import (
 // Controller owns the lifecycle of the reverse proxy. It does NOT bind a
 // listener until Start is called.
 type Controller struct {
-	cfg   *config.Store
-	store *store.Store
+	cfg         *config.Store
+	store       *store.Store
+	breakpoints *Registry
 
 	mu       sync.Mutex
 	port     int
@@ -50,7 +51,12 @@ func NewController(port int, cfg *config.Store, st *store.Store) (*Controller, e
 	if cfg == nil || st == nil {
 		return nil, errors.New("proxy: config and store are required")
 	}
-	return &Controller{cfg: cfg, store: st, port: port}, nil
+	return &Controller{cfg: cfg, store: st, port: port, breakpoints: NewRegistry()}, nil
+}
+
+// Breakpoints exposes the registry so the API layer can register handlers.
+func (c *Controller) Breakpoints() *Registry {
+	return c.breakpoints
 }
 
 // Start binds the listener on the configured port and begins serving. Calling
@@ -143,7 +149,7 @@ func (c *Controller) startLocked() error {
 	if err != nil {
 		return fmt.Errorf("bind %s: %w", addr, err)
 	}
-	p, err := newWithListener(ln, c.cfg, c.store)
+	p, err := newWithListener(ln, c.cfg, c.store, c.breakpoints)
 	if err != nil {
 		_ = ln.Close()
 		return err

@@ -30,10 +30,11 @@ import (
 
 // Proxy is the runtime state: listener + HTTP server + config/store refs.
 type Proxy struct {
-	listener net.Listener
-	server   *http.Server
-	cfg      *config.Store
-	store    *store.Store
+	listener    net.Listener
+	server      *http.Server
+	cfg         *config.Store
+	store       *store.Store
+	breakpoints *Registry
 
 	mu     sync.Mutex
 	closed bool
@@ -50,17 +51,17 @@ func New(port int, cfg *config.Store, st *store.Store) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newWithListener(ln, cfg, st)
+	return newWithListener(ln, cfg, st, nil)
 }
 
 // newWithListener wires up a Proxy around a listener the caller has already
 // bound. Used by the controller, which needs to bind the port itself so it
 // can recover on Stop+Start without an extra dance.
-func newWithListener(ln net.Listener, cfg *config.Store, st *store.Store) (*Proxy, error) {
+func newWithListener(ln net.Listener, cfg *config.Store, st *store.Store, reg *Registry) (*Proxy, error) {
 	if cfg == nil || st == nil {
 		return nil, errors.New("proxy: config and store are required")
 	}
-	p := &Proxy{listener: ln, cfg: cfg, store: st}
+	p := &Proxy{listener: ln, cfg: cfg, store: st, breakpoints: reg}
 	p.server = &http.Server{
 		Handler:           p,
 		ReadHeaderTimeout: 30 * time.Second,
@@ -147,6 +148,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Persist the request snapshot immediately so it appears in the UI even
 	// before the upstream responds (important for long-running streams).
 	p.store.Add(entry)
+
+	// Breakpoint check happens after the request is in the store (so the UI
+	// has something to show next to the "paused" indicator) but before the
+	// upstream call. If the user aborts we never even open the connection.
+	if p.breakpoints != nil {
+		if bp := p.breakpoints.Match(r); bp != nil {
+			decision := p.breakpoints.Hold(r.Context(), bp.ID, entry.ID, r.Method, r.URL.RequestURI())
+			if decision == DecisionAbort {
+				p.store.Update(entry.ID, func(e *store.Entry) {
+					e.Error = "aborted at breakpoint " + bp.ID
+					e.EndedAt = time.Now()
+					e.DurationMillis = e.EndedAt.Sub(started).Milliseconds()
+				})
+				http.Error(w, "ai-fox: aborted at breakpoint", http.StatusServiceUnavailable)
+				return
+			}
+		}
+	}
 
 	upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), bytes.NewReader(bodyBytes))
 	if err != nil {
