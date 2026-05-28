@@ -78,7 +78,7 @@ package() {
   install -dm755 "\$pkgdir/opt/${NAME}"
   cp -a "${APP_DIR}/." "\$pkgdir/opt/${NAME}/"
 
-  # Normalise permissions. `cp -a` preserves source modes; if the developer
+  # Normalise permissions. \`cp -a\` preserves source modes; if the developer
   # building the package has a restrictive umask (077 / 027), the top-level
   # /opt/<name> dir ends up owner-only (drwx------), and the desktop launcher
   # fails because /usr/bin/<name> -> /opt/<name>/<name> is unreachable for
