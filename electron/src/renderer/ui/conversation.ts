@@ -196,7 +196,7 @@ function renderTools(tools: AnthropicTool[]): HTMLElement {
     if (tl.raw && !tl.name) {
       list.appendChild(
         h(
-          "div.conv-tool unknown",
+          "div.conv-tool.unknown",
           null,
           h("div.conv-tool-head", null, h("strong", null, "(unknown tool)")),
           rawJsonBox(tl.raw),
@@ -277,7 +277,7 @@ function renderBlock(blk: AnthropicBlock): HTMLElement {
       const isErr = blk.isError === true;
       const body = renderToolResultContent(blk.content);
       return h(
-        `div.conv-block.tool-result${isErr ? " is-error" : ""}`,
+        `div.conv-block.tool-result${isErr ? ".is-error" : ""}`,
         null,
         h(
           "div.conv-block-tag",
@@ -331,8 +331,11 @@ function chip(label: string): HTMLElement {
 }
 
 function pill(label: string, value: string, variant?: string): HTMLElement {
+  // Use `.foo.bar` (dot-separated) — parseSpec doesn't split on whitespace,
+  // so a space here would land as a single invalid class token and trip
+  // classList.add with InvalidCharacterError.
   return h(
-    `span.conv-pill${variant ? ` v-${variant}` : ""}`,
+    `span.conv-pill${variant ? `.v-${variant}` : ""}`,
     null,
     h("span.k", null, label),
     h("span.v", null, value),

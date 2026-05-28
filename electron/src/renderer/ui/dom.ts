@@ -24,15 +24,19 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 }
 
 function parseSpec(spec: string): { tag: string; id: string | null; classes: string[] } {
-  const idx = spec.search(/[#.]/);
+  const idx = spec.search(/[#.\s]/);
   const tag = idx === -1 ? spec : spec.slice(0, idx);
   const rest = idx === -1 ? "" : spec.slice(idx);
   let id: string | null = null;
   const classes: string[] = [];
-  for (const part of rest.split(/(?=[.#])/g)) {
+  // Also split on whitespace so "div.foo bar" yields ["foo", "bar"] instead
+  // of one class token containing a space — classList.add would throw
+  // InvalidCharacterError on the latter and kill the entire render path.
+  for (const part of rest.split(/(?=[.#])|\s+/g)) {
     if (!part) continue;
     if (part[0] === "#") id = part.slice(1);
     else if (part[0] === ".") classes.push(part.slice(1));
+    else classes.push(part);
   }
   return { tag: tag || "div", id, classes };
 }

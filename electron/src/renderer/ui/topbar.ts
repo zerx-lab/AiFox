@@ -97,14 +97,6 @@ export function renderTopbar(): HTMLElement {
   return h(
     "div.topbar",
     null,
-    h(
-      "div.brand",
-      null,
-      h("span.brand-mark"),
-      h("span", null, t("app.title")),
-      h("span.brand-sub", null, t("app.subtitle")),
-    ),
-    h("span.topbar-sep"),
     proxyChip,
     proxyToggle,
     h("span.topbar-spacer"),
