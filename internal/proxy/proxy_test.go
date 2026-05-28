@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -223,7 +224,7 @@ func TestStreamingResponseIsCaptured(t *testing.T) {
 	}
 }
 
-func TestControllerStopReturns503AndKeepsAddress(t *testing.T) {
+func TestControllerStopFreesPortAndRebindsOnStart(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")
 	}))
@@ -261,13 +262,10 @@ func TestControllerStopReturns503AndKeepsAddress(t *testing.T) {
 		t.Fatalf("stopped address should remain stable, got %q vs %q", ctrl.Address(), addr)
 	}
 
-	resp2, err := http.Get("http://" + addr + "/ping")
-	if err != nil {
-		t.Fatalf("get while disabled: %v", err)
-	}
-	_ = resp2.Body.Close()
-	if resp2.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("disabled proxy should return 503, got %d", resp2.StatusCode)
+	// Listener is closed — request errors at the TCP level, not 503.
+	client := http.Client{Timeout: time.Second}
+	if _, err := client.Get("http://" + addr + "/ping"); err == nil {
+		t.Fatalf("stopped proxy should refuse connections")
 	}
 
 	if err := ctrl.Start(); err != nil {
@@ -280,5 +278,39 @@ func TestControllerStopReturns503AndKeepsAddress(t *testing.T) {
 	_ = resp3.Body.Close()
 	if resp3.StatusCode != 200 {
 		t.Fatalf("re-started proxy should forward, got %d", resp3.StatusCode)
+	}
+}
+
+func TestControllerSetPortRebinds(t *testing.T) {
+	cfg := newConfig(t, config.Settings{})
+	ctrl, err := NewController(0, cfg, store.New(2))
+	if err != nil {
+		t.Fatalf("controller new: %v", err)
+	}
+	t.Cleanup(ctrl.Close)
+	if err := ctrl.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	first := ctrl.Port()
+
+	// Pick a different free port by binding+immediately closing.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("probe listen: %v", err)
+	}
+	target := probe.Addr().(*net.TCPAddr).Port
+	_ = probe.Close()
+
+	if err := ctrl.SetPort(target); err != nil {
+		t.Fatalf("set port: %v", err)
+	}
+	if ctrl.Port() != target {
+		t.Fatalf("port should now be %d, got %d", target, ctrl.Port())
+	}
+	if ctrl.Port() == first {
+		t.Fatalf("port should have changed")
+	}
+	if !ctrl.Enabled() {
+		t.Fatalf("controller should still be running after port change")
 	}
 }

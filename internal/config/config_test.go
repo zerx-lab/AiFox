@@ -18,8 +18,11 @@ func TestOpenMissingFileReturnsDefaults(t *testing.T) {
 	if got.AuthPreset != PresetAnthropic {
 		t.Fatalf("default AuthPreset should be anthropic, got %q", got.AuthPreset)
 	}
-	if !got.ProxyEnabled {
-		t.Fatalf("proxy should default to enabled")
+	if got.ProxyEnabled {
+		t.Fatalf("proxy should default to disabled (manual connect)")
+	}
+	if got.ProxyPort != DefaultProxyPort {
+		t.Fatalf("proxy port should default to %d, got %d", DefaultProxyPort, got.ProxyPort)
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/zerx-lab/ai-fox/internal/config"
+	"github.com/zerx-lab/ai-fox/internal/llmparse"
 	"github.com/zerx-lab/ai-fox/internal/store"
 )
 
@@ -48,6 +49,16 @@ func New(port int, cfg *config.Store, st *store.Store) (*Proxy, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
+	}
+	return newWithListener(ln, cfg, st)
+}
+
+// newWithListener wires up a Proxy around a listener the caller has already
+// bound. Used by the controller, which needs to bind the port itself so it
+// can recover on Stop+Start without an extra dance.
+func newWithListener(ln net.Listener, cfg *config.Store, st *store.Store) (*Proxy, error) {
+	if cfg == nil || st == nil {
+		return nil, errors.New("proxy: config and store are required")
 	}
 	p := &Proxy{listener: ln, cfg: cfg, store: st}
 	p.server = &http.Server{
@@ -184,7 +195,33 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.store.Update(entry.ID, func(e *store.Entry) {
 		e.EndedAt = time.Now()
 		e.DurationMillis = e.EndedAt.Sub(started).Milliseconds()
+		// Best-effort structured analysis. Runs on the final captured bodies
+		// so partial streams still get whatever the analyzer can extract.
+		analysis := llmparse.Analyze(llmparse.Input{
+			Method:          e.Method,
+			URL:             e.URL,
+			RequestBody:     e.RequestBody,
+			ResponseBody:    e.ResponseBody,
+			ResponseHeaders: lowerKeys(e.ResponseHeaders),
+			Streaming:       e.Streaming,
+		})
+		if analysis != nil {
+			e.Analysis = analysis
+		}
 	})
+}
+
+// lowerKeys returns a copy of h with lowercased keys, so analyzers can look
+// up content-type without juggling Go's CanonicalHeaderKey casing.
+func lowerKeys(h map[string]string) map[string]string {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		out[strings.ToLower(k)] = v
+	}
+	return out
 }
 
 // captureAndStream copies upstream into the client while appending to the

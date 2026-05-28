@@ -14,9 +14,12 @@ interface Draft {
   authPreset: string;
   customHeaders: HeaderKV[];
   proxyEnabled: boolean;
+  proxyPort: number;
   language: string;
   theme: string;
 }
+
+const DEFAULT_PROXY_PORT = 8787;
 
 function toDraft(s: Settings): Draft {
   return {
@@ -24,7 +27,8 @@ function toDraft(s: Settings): Draft {
     upstreamApiKey: s.upstreamApiKey ?? "",
     authPreset: s.authPreset || "anthropic",
     customHeaders: (s.customHeaders ?? []).map((h) => ({ ...h })),
-    proxyEnabled: s.proxyEnabled ?? true,
+    proxyEnabled: s.proxyEnabled ?? false,
+    proxyPort: s.proxyPort && s.proxyPort > 0 ? s.proxyPort : DEFAULT_PROXY_PORT,
     language: s.language ?? "",
     theme: s.theme ?? "",
   };
@@ -36,7 +40,8 @@ function emptySettings(): Settings {
     upstreamApiKey: "",
     authPreset: "anthropic",
     customHeaders: [],
-    proxyEnabled: true,
+    proxyEnabled: false,
+    proxyPort: DEFAULT_PROXY_PORT,
     language: "",
     theme: "",
   };
@@ -121,6 +126,18 @@ export function renderSettings(): HTMLElement {
   });
   section3.appendChild(proxyField);
 
+  const portField = numberField({
+    label: t("settings.proxyPort"),
+    hint: t("settings.proxyPortHint"),
+    value: draft.proxyPort,
+    min: 1,
+    max: 65535,
+    onchange: (v) => {
+      draft.proxyPort = v;
+    },
+  });
+  section3.appendChild(portField);
+
   // ----- appearance section -----
   const section4 = section(t("settings.sectionAppearance"));
   inner.appendChild(section4);
@@ -170,6 +187,7 @@ export function renderSettings(): HTMLElement {
             .map((h) => ({ name: h.name.trim(), value: h.value }))
             .filter((h) => h.name.length > 0),
           proxyEnabled: draft.proxyEnabled,
+          proxyPort: clampPort(draft.proxyPort),
           language: draft.language as Settings["language"],
           theme: draft.theme as Settings["theme"],
         };
@@ -227,6 +245,38 @@ function textField(opts: {
     input,
     opts.hint ? h("div.hint", null, opts.hint) : null,
   );
+}
+
+function numberField(opts: {
+  label: string;
+  hint?: string;
+  value: number;
+  min?: number;
+  max?: number;
+  onchange: (v: number) => void;
+}): HTMLElement {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.value = String(opts.value);
+  if (opts.min !== undefined) input.min = String(opts.min);
+  if (opts.max !== undefined) input.max = String(opts.max);
+  input.addEventListener("input", () => {
+    const parsed = Number.parseInt(input.value, 10);
+    if (Number.isFinite(parsed)) opts.onchange(parsed);
+  });
+  return h(
+    "div.field",
+    null,
+    h("label", null, opts.label),
+    input,
+    opts.hint ? h("div.hint", null, opts.hint) : null,
+  );
+}
+
+function clampPort(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_PROXY_PORT;
+  if (n < 1 || n > 65535) return DEFAULT_PROXY_PORT;
+  return Math.floor(n);
 }
 
 function selectField(opts: {

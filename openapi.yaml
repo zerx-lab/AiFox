@@ -1,5 +1,180 @@
 components:
   schemas:
+    Analysis:
+      additionalProperties: false
+      properties:
+        anthropic:
+          $ref: "#/components/schemas/AnthropicAnalysis"
+        endpoint:
+          description: Human-readable endpoint label
+          type: string
+        kind:
+          description: Analyzer that produced this view
+          type: string
+        warnings:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - kind
+        - endpoint
+      type: object
+    AnthropicAnalysis:
+      additionalProperties: false
+      properties:
+        request:
+          $ref: "#/components/schemas/AnthropicRequest"
+        response:
+          $ref: "#/components/schemas/AnthropicResponse"
+      type: object
+    AnthropicBlock:
+      additionalProperties: false
+      properties:
+        cacheControl: {}
+        content: {}
+        id:
+          type: string
+        input: {}
+        isError:
+          type: boolean
+        name:
+          type: string
+        raw: {}
+        text:
+          type: string
+        toolUseId:
+          type: string
+        type:
+          type: string
+      required:
+        - type
+      type: object
+    AnthropicError:
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+        type:
+          type: string
+      type: object
+    AnthropicMessage:
+      additionalProperties: false
+      properties:
+        content:
+          items:
+            $ref: "#/components/schemas/AnthropicBlock"
+          type:
+            - array
+            - "null"
+        role:
+          type: string
+      required:
+        - role
+        - content
+      type: object
+    AnthropicRequest:
+      additionalProperties: false
+      properties:
+        maxTokens:
+          format: int64
+          type: integer
+        messages:
+          items:
+            $ref: "#/components/schemas/AnthropicMessage"
+          type:
+            - array
+            - "null"
+        metadata: {}
+        model:
+          type: string
+        stopSequences:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        stream:
+          type: boolean
+        system:
+          items:
+            $ref: "#/components/schemas/AnthropicBlock"
+          type:
+            - array
+            - "null"
+        temperature:
+          format: double
+          type: number
+        toolChoice: {}
+        tools:
+          items:
+            $ref: "#/components/schemas/AnthropicTool"
+          type:
+            - array
+            - "null"
+        topK:
+          format: int64
+          type: integer
+        topP:
+          format: double
+          type: number
+        unknownFields:
+          additionalProperties: {}
+          type: object
+      type: object
+    AnthropicResponse:
+      additionalProperties: false
+      properties:
+        content:
+          items:
+            $ref: "#/components/schemas/AnthropicBlock"
+          type:
+            - array
+            - "null"
+        error:
+          $ref: "#/components/schemas/AnthropicError"
+        id:
+          type: string
+        model:
+          type: string
+        role:
+          type: string
+        stopReason:
+          type: string
+        streamed:
+          type: boolean
+        usage:
+          $ref: "#/components/schemas/AnthropicUsage"
+      type: object
+    AnthropicTool:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        inputSchema: {}
+        name:
+          type: string
+        raw: {}
+      required:
+        - name
+      type: object
+    AnthropicUsage:
+      additionalProperties: false
+      properties:
+        cacheCreationInputTokens:
+          format: int64
+          type: integer
+        cacheReadInputTokens:
+          format: int64
+          type: integer
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+      type: object
     ErrorDetail:
       additionalProperties: false
       properties:
@@ -123,7 +298,7 @@ components:
           readOnly: true
           type: string
         address:
-          description: Loopback host:port the proxy listens on (or last-bound when stopped)
+          description: Loopback host:port the proxy listens on (stable across enable/disable)
           type: string
         baseUrl:
           description: Full http://host:port URL clients should point at
@@ -134,9 +309,14 @@ components:
         enabled:
           description: True when the listener is accepting connections
           type: boolean
+        port:
+          description: Fixed loopback port the proxy is configured to use
+          format: int64
+          type: integer
       required:
         - address
         - baseUrl
+        - port
         - configured
         - enabled
       type: object
@@ -191,6 +371,12 @@ components:
         proxyEnabled:
           description: Whether the proxy listener should be running
           type: boolean
+        proxyPort:
+          description: Fixed loopback port the proxy binds to
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
         theme:
           description: UI color scheme; empty means follow OS
           enum:
@@ -210,6 +396,7 @@ components:
         - authPreset
         - customHeaders
         - proxyEnabled
+        - proxyPort
         - language
         - theme
       type: object
@@ -223,6 +410,8 @@ components:
           format: uri
           readOnly: true
           type: string
+        analysis:
+          $ref: "#/components/schemas/Analysis"
         durationMillis:
           format: int64
           type: integer

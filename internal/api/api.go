@@ -19,6 +19,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/zerx-lab/ai-fox/internal/config"
+	"github.com/zerx-lab/ai-fox/internal/llmparse"
 	"github.com/zerx-lab/ai-fox/internal/store"
 )
 
@@ -27,7 +28,9 @@ import (
 type ProxyController interface {
 	Enabled() bool
 	Address() string
+	Port() int
 	SetEnabled(bool) (bool, error)
+	SetPort(int) error
 }
 
 // Deps groups the runtime collaborators handlers need. Wired in main.
@@ -143,6 +146,7 @@ type SettingsBody struct {
 	AuthPreset      string         `json:"authPreset" enum:"anthropic,openai,openai-responses,custom" doc:"Picks the header shape used to authenticate upstream"`
 	CustomHeaders   []HeaderKVBody `json:"customHeaders" doc:"User-defined headers injected on every forwarded request (only when authPreset=custom)"`
 	ProxyEnabled    bool           `json:"proxyEnabled" doc:"Whether the proxy listener should be running"`
+	ProxyPort       int            `json:"proxyPort" minimum:"1" maximum:"65535" doc:"Fixed loopback port the proxy binds to"`
 	Language        string         `json:"language" enum:",en,zh-CN" doc:"UI language code; empty means follow OS"`
 	Theme           string         `json:"theme" enum:",dark,light" doc:"UI color scheme; empty means follow OS"`
 }
@@ -158,6 +162,7 @@ func wireSettings(s config.Settings) SettingsBody {
 		AuthPreset:      string(s.AuthPreset),
 		CustomHeaders:   headers,
 		ProxyEnabled:    s.ProxyEnabled,
+		ProxyPort:       s.ProxyPort,
 		Language:        string(s.Language),
 		Theme:           string(s.Theme),
 	}
@@ -177,6 +182,7 @@ func fromWireSettings(b SettingsBody) config.Settings {
 		AuthPreset:      config.AuthPreset(b.AuthPreset),
 		CustomHeaders:   headers,
 		ProxyEnabled:    b.ProxyEnabled,
+		ProxyPort:       b.ProxyPort,
 		Language:        config.Language(b.Language),
 		Theme:           config.Theme(b.Theme),
 	}
@@ -197,17 +203,24 @@ type PutSettingsInput struct {
 }
 
 // putSettingsHandler persists the new settings AND reconciles the proxy
-// controller: if the user toggled ProxyEnabled here, it takes effect right
-// away without a separate call to /v1/proxy.
+// controller: if the user toggled ProxyEnabled or changed the port here, it
+// takes effect right away without a separate call to /v1/proxy.
 func putSettingsHandler(cfg *config.Store, prox ProxyController) func(context.Context, *PutSettingsInput) (*GetSettingsOutput, error) {
 	return func(_ context.Context, in *PutSettingsInput) (*GetSettingsOutput, error) {
 		if err := cfg.Set(fromWireSettings(in.Body)); err != nil {
 			return nil, huma.Error500InternalServerError("persist settings: " + err.Error())
 		}
 		updated := cfg.Get()
-		if prox != nil && prox.Enabled() != updated.ProxyEnabled {
-			if _, err := prox.SetEnabled(updated.ProxyEnabled); err != nil {
-				return nil, huma.Error500InternalServerError("reconcile proxy: " + err.Error())
+		if prox != nil {
+			if prox.Port() != updated.ProxyPort {
+				if err := prox.SetPort(updated.ProxyPort); err != nil {
+					return nil, huma.Error500InternalServerError("change proxy port: " + err.Error())
+				}
+			}
+			if prox.Enabled() != updated.ProxyEnabled {
+				if _, err := prox.SetEnabled(updated.ProxyEnabled); err != nil {
+					return nil, huma.Error500InternalServerError("reconcile proxy: " + err.Error())
+				}
 			}
 		}
 		return &GetSettingsOutput{Body: wireSettings(updated)}, nil
@@ -218,8 +231,9 @@ func putSettingsHandler(cfg *config.Store, prox ProxyController) func(context.Co
 
 type ProxyInfoOutput struct {
 	Body struct {
-		Address    string `json:"address" doc:"Loopback host:port the proxy listens on (or last-bound when stopped)"`
+		Address    string `json:"address" doc:"Loopback host:port the proxy listens on (stable across enable/disable)"`
 		BaseURL    string `json:"baseUrl" doc:"Full http://host:port URL clients should point at"`
+		Port       int    `json:"port" doc:"Fixed loopback port the proxy is configured to use"`
 		Configured bool   `json:"configured" doc:"True when upstreamBaseUrl is set"`
 		Enabled    bool   `json:"enabled" doc:"True when the listener is accepting connections"`
 	}
@@ -230,6 +244,7 @@ func getProxyInfoHandler(cfg *config.Store, prox ProxyController) func(context.C
 		out := &ProxyInfoOutput{}
 		if prox != nil {
 			out.Body.Address = prox.Address()
+			out.Body.Port = prox.Port()
 			out.Body.Enabled = prox.Enabled()
 			if out.Body.Address != "" {
 				out.Body.BaseURL = fmt.Sprintf("http://%s", out.Body.Address)
@@ -264,6 +279,7 @@ func setProxyEnabledHandler(cfg *config.Store, prox ProxyController) func(contex
 		}
 		out := &ProxyInfoOutput{}
 		out.Body.Address = prox.Address()
+		out.Body.Port = prox.Port()
 		out.Body.Enabled = prox.Enabled()
 		if out.Body.Address != "" {
 			out.Body.BaseURL = fmt.Sprintf("http://%s", out.Body.Address)
@@ -279,27 +295,28 @@ func setProxyEnabledHandler(cfg *config.Store, prox ProxyController) func(contex
 // store.Entry; using a separate struct keeps OpenAPI in control of the
 // schema rather than leaking Go-only field tags.
 type TrafficEntry struct {
-	ID              string            `json:"id"`
-	StartedAt       time.Time         `json:"startedAt"`
-	EndedAt         time.Time         `json:"endedAt"`
-	DurationMillis  int64             `json:"durationMillis"`
-	Method          string            `json:"method"`
-	URL             string            `json:"url"`
-	UpstreamURL     string            `json:"upstreamUrl"`
-	StatusCode      int               `json:"statusCode"`
-	RequestHeaders  map[string]string `json:"requestHeaders"`
-	RequestBody     string            `json:"requestBody"`
-	RequestSize     int64             `json:"requestSize"`
-	ResponseHeaders map[string]string `json:"responseHeaders"`
-	ResponseBody    string            `json:"responseBody"`
-	ResponseSize    int64             `json:"responseSize"`
-	Streaming       bool              `json:"streaming"`
-	Truncated       bool              `json:"truncated"`
-	Error           string            `json:"error,omitempty"`
+	ID              string             `json:"id"`
+	StartedAt       time.Time          `json:"startedAt"`
+	EndedAt         time.Time          `json:"endedAt"`
+	DurationMillis  int64              `json:"durationMillis"`
+	Method          string             `json:"method"`
+	URL             string             `json:"url"`
+	UpstreamURL     string             `json:"upstreamUrl"`
+	StatusCode      int                `json:"statusCode"`
+	RequestHeaders  map[string]string  `json:"requestHeaders"`
+	RequestBody     string             `json:"requestBody"`
+	RequestSize     int64              `json:"requestSize"`
+	ResponseHeaders map[string]string  `json:"responseHeaders"`
+	ResponseBody    string             `json:"responseBody"`
+	ResponseSize    int64              `json:"responseSize"`
+	Streaming       bool               `json:"streaming"`
+	Truncated       bool               `json:"truncated"`
+	Error           string             `json:"error,omitempty"`
+	Analysis        *llmparse.Analysis `json:"analysis,omitempty"`
 }
 
 func toWire(e *store.Entry) TrafficEntry {
-	return TrafficEntry{
+	out := TrafficEntry{
 		ID:              e.ID,
 		StartedAt:       e.StartedAt,
 		EndedAt:         e.EndedAt,
@@ -318,6 +335,10 @@ func toWire(e *store.Entry) TrafficEntry {
 		Truncated:       e.Truncated,
 		Error:           e.Error,
 	}
+	if a, ok := e.Analysis.(*llmparse.Analysis); ok {
+		out.Analysis = a
+	}
+	return out
 }
 
 type ListTrafficOutput struct {

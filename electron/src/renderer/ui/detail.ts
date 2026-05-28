@@ -4,12 +4,13 @@
 
 import { t } from "../i18n";
 import { formatBody } from "./body";
+import { hasConversation, renderConversation } from "./conversation";
 import { h } from "./dom";
 import { fmtBytes, fmtClock, fmtDuration, isPending } from "./format";
 import { highlight } from "./highlight";
 import { getState, type TrafficEntry } from "./state";
 
-type Tab = "overview" | "request" | "response";
+type Tab = "overview" | "conversation" | "request" | "response";
 let activeTab: Tab = "overview";
 
 export function renderDetail(): HTMLElement {
@@ -20,11 +21,17 @@ export function renderDetail(): HTMLElement {
     return h("div.detail", null, h("div.detail-empty", null, t("detail.selectPrompt")));
   }
 
+  // Clamp the active tab so when the user moves to an entry without a
+  // structured analysis we don't get stuck on a hidden tab.
+  if (activeTab === "conversation" && !hasConversation(entry)) {
+    activeTab = "overview";
+  }
+
   return h(
     "div.detail",
     null,
     detailHead(entry),
-    detailTabs(),
+    detailTabs(entry),
     h("div.detail-body", null, renderTabBody(entry)),
   );
 }
@@ -45,14 +52,14 @@ function detailHead(entry: TrafficEntry): HTMLElement {
   );
 }
 
-function detailTabs(): HTMLElement {
-  return h(
-    "div.detail-tabs",
-    null,
-    tabBtn("overview", t("detail.tabs.overview")),
-    tabBtn("request", t("detail.tabs.request")),
-    tabBtn("response", t("detail.tabs.response")),
-  );
+function detailTabs(entry: TrafficEntry): HTMLElement {
+  const tabs: HTMLElement[] = [tabBtn("overview", t("detail.tabs.overview"))];
+  if (hasConversation(entry)) {
+    tabs.push(tabBtn("conversation", t("detail.tabs.conversation")));
+  }
+  tabs.push(tabBtn("request", t("detail.tabs.request")));
+  tabs.push(tabBtn("response", t("detail.tabs.response")));
+  return h("div.detail-tabs", null, ...tabs);
 }
 
 function tabBtn(tab: Tab, label: string): HTMLElement {
@@ -75,6 +82,7 @@ function tabBtn(tab: Tab, label: string): HTMLElement {
 
 function renderTabBody(entry: TrafficEntry): HTMLElement {
   if (activeTab === "overview") return overviewBody(entry);
+  if (activeTab === "conversation") return renderConversation(entry);
   if (activeTab === "request")
     return ioBody({ headers: entry.requestHeaders ?? {}, body: entry.requestBody ?? "" });
   return ioBody({ headers: entry.responseHeaders ?? {}, body: entry.responseBody ?? "" });

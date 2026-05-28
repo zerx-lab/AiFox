@@ -52,6 +52,11 @@ type HeaderKV struct {
 	Value string `json:"value"`
 }
 
+// DefaultProxyPort is the fixed loopback port the proxy binds to when the
+// user hasn't overridden it. Chosen to avoid clashes with common dev servers
+// (3000/5173/8080/8888) and yet be easy to remember.
+const DefaultProxyPort = 8787
+
 // Settings is the persisted shape of user configuration. Field names follow
 // JSON convention so the file is human-editable in a pinch.
 type Settings struct {
@@ -69,8 +74,12 @@ type Settings struct {
 	// the client supplied with the same name.
 	CustomHeaders []HeaderKV `json:"customHeaders"`
 	// ProxyEnabled toggles the reverse proxy on/off without restarting the
-	// app. Defaults to true.
+	// app. Defaults to false; the user has to manually press "Connect".
 	ProxyEnabled bool `json:"proxyEnabled"`
+	// ProxyPort is the fixed loopback port the proxy listener binds to.
+	// Out-of-range values normalize back to DefaultProxyPort so a hand-edited
+	// JSON can't put the app into an unstartable state.
+	ProxyPort int `json:"proxyPort"`
 	// Language is the active UI locale. Empty means "follow OS".
 	Language Language `json:"language"`
 	// Theme is the active color scheme. Empty means "follow OS".
@@ -144,14 +153,6 @@ func (s *Store) load() error {
 		s.settings = defaults()
 		return nil
 	}
-	// json.Unmarshal leaves bool fields false. We can't distinguish "user
-	// disabled the proxy" from "field absent" in stored JSON, but the file
-	// is always written by Set() which normalizes, so on-disk JSON always
-	// has the field present. A missing field can only happen on a hand-
-	// edited or pre-existing file — treat that as "default enabled".
-	if len(raw) > 0 && !hasProxyEnabledKey(raw) {
-		loaded.ProxyEnabled = true
-	}
 	s.settings = normalize(loaded)
 	return nil
 }
@@ -159,7 +160,8 @@ func (s *Store) load() error {
 func defaults() Settings {
 	return Settings{
 		AuthPreset:   PresetAnthropic,
-		ProxyEnabled: true,
+		ProxyEnabled: false,
+		ProxyPort:    DefaultProxyPort,
 	}
 }
 
@@ -182,16 +184,10 @@ func normalize(s Settings) Settings {
 	if s.CustomHeaders == nil {
 		s.CustomHeaders = []HeaderKV{}
 	}
-	return s
-}
-
-func hasProxyEnabledKey(raw []byte) bool {
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return false
+	if s.ProxyPort < 1 || s.ProxyPort > 65535 {
+		s.ProxyPort = DefaultProxyPort
 	}
-	_, ok := probe["proxyEnabled"]
-	return ok
+	return s
 }
 
 func write(path string, s Settings) error {

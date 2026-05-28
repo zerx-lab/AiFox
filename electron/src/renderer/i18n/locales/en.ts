@@ -27,10 +27,10 @@ export const en = {
     themeSystem: "System",
     themeDark: "Dark",
     themeLight: "Light",
-    proxyOn: "Proxy on",
-    proxyOff: "Proxy off",
-    proxyToggleOn: "Start proxy",
-    proxyToggleOff: "Stop proxy",
+    proxyOn: "Connected",
+    proxyOff: "Disconnected",
+    proxyToggleOn: "Connect",
+    proxyToggleOff: "Disconnect",
   },
   sidebar: {
     empty: "No requests captured yet.",
@@ -43,6 +43,7 @@ export const en = {
     selectPrompt: "Select a request from the list to inspect it.",
     tabs: {
       overview: "Overview",
+      conversation: "Conversation",
       request: "Request",
       response: "Response",
     },
@@ -88,9 +89,13 @@ export const en = {
     headerAdd: "Add header",
     headerRemove: "Remove",
     proxyEnabled: "Proxy listener",
-    proxyEnabledHint: "Toggle off to pause forwarding without changing the proxy URL.",
-    proxyOn: "On",
-    proxyOff: "Off (returns 503)",
+    proxyEnabledHint:
+      "Disconnected by default — connect from the top bar (or here) to start forwarding.",
+    proxyOn: "Connected",
+    proxyOff: "Disconnected",
+    proxyPort: "Proxy port",
+    proxyPortHint:
+      "Fixed loopback port (1–65535). Point your AI client at http://127.0.0.1:<port>.",
     language: "Language",
     languageFollowOs: "Follow OS",
     theme: "Theme",
@@ -104,7 +109,29 @@ export const en = {
   status: {
     entries: "{count} entries",
     listening: "Listening on {address}",
-    notListening: "Proxy paused",
+    notListening: "Disconnected — press Connect to start the proxy",
+  },
+  conversation: {
+    requestTitle: "Request",
+    responseTitle: "Response",
+    messagesTitle: "Messages",
+    systemTitle: "System",
+    toolsTitle: "Tools",
+    unknownFields: "Unrecognized request fields",
+    unknownFieldsHint:
+      "These fields aren't part of the documented Messages API the parser knows about. Showing them verbatim so you can inspect future / beta parameters.",
+    unknownBlockHint:
+      "This content block type isn't recognized by the parser. Raw payload follows so you can inspect new block kinds.",
+    unparseable:
+      "No structured view for this request — falling back to raw JSON in the Request / Response tabs.",
+    warningsTitle: "Parser notes",
+    stream: "stream",
+    nonStream: "non-stream",
+    responseEmpty: "(no content blocks)",
+    usageInput: "input",
+    usageOutput: "output",
+    usageCacheRead: "cache read",
+    usageCacheCreate: "cache create",
   },
   units: {
     ms: "ms",

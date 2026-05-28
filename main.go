@@ -53,13 +53,18 @@ func runServer() error {
 	}
 	traffic := store.New(500)
 
-	ctrl, err := proxy.NewController(0, settings, traffic)
+	ctrl, err := proxy.NewController(settings.Get().ProxyPort, settings, traffic)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
+	// Honor the persisted enabled flag, but boot defaults to disabled — the
+	// user has to manually press "Connect" in the UI on a fresh install.
 	if settings.Get().ProxyEnabled {
 		if err := ctrl.Start(); err != nil {
-			return fmt.Errorf("proxy start: %w", err)
+			// Don't fail the whole app — let the user see the port conflict
+			// in the UI and pick a different port. The handshake still goes
+			// out so the renderer can boot and surface the error.
+			fmt.Fprintln(os.Stderr, "proxy start (disabled):", err)
 		}
 	}
 

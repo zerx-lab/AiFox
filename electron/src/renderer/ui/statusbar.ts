@@ -8,9 +8,10 @@ export function renderStatusbar(): HTMLElement {
   const total = s.entries.length;
   const lastError = s.entries.find((e) => e.error)?.error ?? "";
 
-  const proxyText = s.proxy?.address
-    ? t("status.listening", { address: s.proxy.address })
-    : t("status.notListening");
+  const proxyText =
+    s.proxy?.enabled && s.proxy.address
+      ? t("status.listening", { address: s.proxy.address })
+      : t("status.notListening");
 
   const bytesIn = s.entries.reduce((acc, e) => acc + (e.requestSize ?? 0), 0);
   const bytesOut = s.entries.reduce((acc, e) => acc + (e.responseSize ?? 0), 0);

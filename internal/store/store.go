@@ -25,6 +25,11 @@ const (
 // Entry is one captured request/response cycle. We keep the full bodies in
 // memory; bodies above MaxBodyBytes are truncated and the Truncated flag is
 // flipped so the UI can warn the user.
+//
+// Analysis is the optional structured view produced by internal/llmparse.
+// Stored as `any` so this package stays decoupled from the parser — the
+// proxy layer is responsible for filling it in and the API layer for
+// re-typing it on the wire.
 type Entry struct {
 	ID              string            `json:"id"`
 	StartedAt       time.Time         `json:"startedAt"`
@@ -43,6 +48,7 @@ type Entry struct {
 	Streaming       bool              `json:"streaming"`
 	Truncated       bool              `json:"truncated"`
 	Error           string            `json:"error,omitempty"`
+	Analysis        any               `json:"analysis,omitempty"`
 }
 
 // MaxBodyBytes caps the per-direction body size we keep in memory.

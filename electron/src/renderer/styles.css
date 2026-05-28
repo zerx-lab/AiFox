@@ -704,6 +704,214 @@ textarea {
   text-align: center;
 }
 
+/* ===== Conversation (structured Anthropic Messages view) ===== */
+.conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.conv-section {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.conv-section > h3 {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin: 0 0 10px;
+  font-weight: 500;
+}
+.conv-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.conv-model {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+}
+.conv-chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  color: var(--fg-3);
+}
+.conv-subsection {
+  margin-top: 14px;
+}
+.conv-subsection > h4 {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin: 0 0 8px;
+  font-weight: 500;
+}
+.conv-count {
+  color: var(--fg-4);
+  font-weight: 400;
+}
+.conv-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.conv-pill {
+  display: inline-flex;
+  align-items: stretch;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+}
+.conv-pill .k {
+  padding: 2px 6px;
+  background: var(--bg-elev-2);
+  color: var(--fg-3);
+}
+.conv-pill .v {
+  padding: 2px 8px;
+  color: var(--fg);
+  font-weight: 600;
+}
+.conv-pill.v-ok .v {
+  color: var(--ok);
+}
+.conv-pill.v-tool .v {
+  color: var(--tool);
+}
+.conv-msgs,
+.conv-blocks,
+.conv-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conv-msg {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--bg);
+}
+.conv-msg.role-user {
+  border-left: 3px solid var(--user);
+}
+.conv-msg.role-assistant {
+  border-left: 3px solid var(--accent);
+}
+.conv-msg.role-system {
+  border-left: 3px solid var(--fg-4);
+}
+.conv-msg-head {
+  margin-bottom: 6px;
+}
+.conv-role {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+.conv-block {
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.conv-block.text {
+  color: var(--fg);
+}
+.conv-block.thinking {
+  color: var(--fg-2);
+  font-style: italic;
+  border-left: 2px solid var(--fg-4);
+  padding-left: 8px;
+}
+.conv-block.tool-use {
+  background: var(--tool-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.conv-block.tool-result {
+  background: var(--bg-elev-2);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+}
+.conv-block.tool-result.is-error {
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+.conv-block.image,
+.conv-block.unknown {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.conv-block-tag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--fg-3);
+  margin-bottom: 6px;
+}
+.conv-tool-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+.conv-id {
+  color: var(--fg-4);
+}
+.conv-err {
+  color: var(--err);
+  font-weight: 600;
+}
+.conv-tool {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--bg);
+}
+.conv-tool-head {
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.conv-tool-desc {
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+.conv-tool-result-text {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.conv-empty {
+  color: var(--fg-4);
+  font-style: italic;
+  font-size: 11.5px;
+}
+.conv-raw {
+  max-height: 280px;
+}
+.warnings {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 11.5px;
+}
+
 /* ===== Status bar ===== */
 .statusbar {
   background: var(--bg-elev);
