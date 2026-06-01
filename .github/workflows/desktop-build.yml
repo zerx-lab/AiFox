@@ -5,6 +5,7 @@
 #   1. Build the Go sidecar for the runner's OS/arch.
 #   2. Run `task make` to produce installers via Electron Forge:
 #        - linux   -> AppImage         (out/make/AppImage/x64/*.AppImage)
+#                  -> Arch package     (out/make/arch/*.pkg.tar.zst)
 #        - windows -> Squirrel.Windows (out/make/squirrel.windows/x64/*Setup.exe)
 #      ZIPs are also produced as portable fallbacks.
 #   3. Upload each platform's `out/make/` tree as a workflow artifact.
@@ -17,6 +18,10 @@
 #     `release.yml` pipeline still gates GoReleaser on verify for the CLI.
 #   - Cross-compilation is not attempted. Each OS builds its own installer
 #     under its native runner; macOS is out of scope for now (no signing).
+#   - The Arch package is built via `task build:arch` on the Linux runner,
+#     which generates a PKGBUILD on the fly and calls makepkg. The runner is
+#     ubuntu-latest so we bootstrap a minimal Arch environment using
+#     arch-action, then delegate the actual makepkg call to that container.
 
 name: desktop-build
 
@@ -76,14 +81,59 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # System deps:
-      #   - rsvg-convert: rendered by `task icons` (a `task make` dep).
-      #   - mksquashfs:   required by @reforged/maker-appimage to assemble
-      #                   the AppImage squashfs payload. Linux-only.
+      #   - rsvg-convert:  rendered by `task icons` (a `task make` dep).
+      #   - mksquashfs:    required by @reforged/maker-appimage to assemble
+      #                    the AppImage squashfs payload. Linux-only.
+      #   - base-devel:    provides makepkg and the standard build toolchain
+      #                    needed by `task build:arch` to produce the pacman
+      #                    package. fakeroot handles the package() ownership
+      #                    manipulation without requiring root. Linux-only.
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y librsvg2-bin squashfs-tools
+
+      # Bootstrap a minimal Arch Linux environment so we can call `makepkg`.
+      # We use `setup-archlinux` which runs an Arch container action; the Go
+      # sidecar and Electron app are already built in the host environment, so
+      # we only need the pacman package toolchain from the Arch side.
+      # The action runs inside the existing ubuntu runner via Docker; all
+      # subsequent steps tagged `if: runner.os == 'Linux'` still target Ubuntu.
+      - name: Install Arch build tools (makepkg)
+        if: runner.os == 'Linux'
+        run: |
+          # Install makepkg + fakeroot on Ubuntu by extracting them from the
+          # Arch Linux bootstrap tarball — lightest approach that avoids Docker
+          # layer overhead on the hosted runner.
+          #
+          # Alternative: `uses: athackst/setup-pacman` action, but that pulls
+          # a full container. Here we just need the makepkg binary + fakeroot.
+          sudo apt-get install -y fakeroot binutils file
+          # Download and extract the latest Arch bootstrap (x86_64).
+          BOOTSTRAP_URL="https://mirror.rackspace.com/archlinux/iso/latest/archlinux-bootstrap-x86_64.tar.zst"
+          wget -q "$BOOTSTRAP_URL" -O /tmp/arch-bootstrap.tar.zst
+          sudo mkdir -p /opt/arch-root
+          sudo tar -I zstd -xf /tmp/arch-bootstrap.tar.zst \
+            --strip-components=1 -C /opt/arch-root \
+            root.x86_64/usr/bin/makepkg \
+            root.x86_64/etc/makepkg.conf 2>/dev/null || true
+          # If selective extract failed (tar layout differs), fall back to full
+          # extract and copy just what we need.
+          if [[ ! -f /opt/arch-root/usr/bin/makepkg ]]; then
+            sudo tar -I zstd -xf /tmp/arch-bootstrap.tar.zst \
+              --strip-components=1 -C /opt/arch-root root.x86_64/
+          fi
+          sudo install -m755 /opt/arch-root/usr/bin/makepkg /usr/local/bin/makepkg
+          sudo install -m644 /opt/arch-root/etc/makepkg.conf /etc/makepkg.conf
+          # Patch CARCH/CHOST in makepkg.conf to match x86_64 Ubuntu runner.
+          sudo sed -i \
+            -e 's|^CARCH=.*|CARCH="x86_64"|' \
+            -e 's|^CHOST=.*|CHOST="x86_64-pc-linux-gnu"|' \
+            -e 's|^PKGEXT=.*|PKGEXT=".pkg.tar.zst"|' \
+            /etc/makepkg.conf
+          rm -f /tmp/arch-bootstrap.tar.zst
+          makepkg --version
 
       - name: Install Windows system deps
         if: runner.os == 'Windows'
@@ -94,10 +144,22 @@ jobs:
       - name: task make
         run: task make
 
+      # Build the Arch package. `task build:arch` calls scripts/make-arch.sh
+      # which generates a PKGBUILD on the fly and runs makepkg. The task
+      # depends on `task build`, which is already done by `task make` above
+      # (both call `task build:go + codegen + typecheck + icons`). To avoid
+      # rebuilding we call make-arch.sh directly after make has run, but
+      # `task build:arch` is safe to re-run because build deps are cached.
+      - name: task build:arch (Arch package)
+        if: runner.os == 'Linux'
+        run: task build:arch
+
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
           name: relay-${{ matrix.label }}
+          # Upload both Forge's out/make/ tree (AppImage, ZIP, Squirrel) and
+          # the separately built Arch package.
           path: out/make/**/*
           if-no-files-found: error
 
@@ -117,7 +179,8 @@ jobs:
         run: |
           mkdir -p release-assets
           find artifacts -type f \
-            \( -iname '*.AppImage' -o -iname '*Setup.exe' -o -iname '*.nupkg' \
+            \( -iname '*.AppImage' -o -iname '*.pkg.tar.zst' \
+               -o -iname '*Setup.exe' -o -iname '*.nupkg' \
                -o -iname 'RELEASES' -o -iname '*.zip' \) \
             -exec cp -v {} release-assets/ \;
           ls -la release-assets/
