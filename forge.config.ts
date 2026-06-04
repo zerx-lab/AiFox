@@ -1,6 +1,8 @@
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { MakerZIP } from "@electron-forge/maker-zip";
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
+import { MakerDeb } from "@electron-forge/maker-deb";
+import { MakerRpm } from "@electron-forge/maker-rpm";
 import { MakerAppImage } from "@reforged/maker-appimage";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -99,11 +101,21 @@ const config: ForgeConfig = {
   // declared platforms, so a single `task make` run on a given OS produces
   // exactly the artifacts that OS can build.
   //
-  //   linux   -> AppImage (single self-contained executable)
+  //   linux   -> .deb / .rpm (system-installed: register .desktop + hicolor
+  //              icons + /usr/bin shim via apt/dpkg/dnf) and AppImage
+  //              (portable single-file executable, no system registration)
   //   win32   -> Squirrel.Windows (RELEASES + .nupkg + Setup.exe; auto-update capable)
   //   darwin  -> ZIP (no signing identity wired in yet)
   //
   // ZIP is also kept as a portable fallback on linux/win32.
+  //
+  // Desktop integration: the AppImage is portable and does NOT add a
+  // launcher entry to the application menu on its own (that needs external
+  // tooling like AppImageLauncher). The .deb/.rpm packages DO — their
+  // post-install installs /usr/share/applications/ai-fox.desktop and the
+  // hicolor icon set, so the app shows up in the menu like a native app.
+  // Arch users are covered by the separate `task build:arch` path
+  // (scripts/make-arch.sh), since Forge has no pacman maker.
   makers: [
     new MakerAppImage({
       options: {
@@ -111,6 +123,37 @@ const config: ForgeConfig = {
         // but being explicit avoids surprises across maker versions.
         icon: "./assets/logo/png/relay-512.png",
         categories: ["Utility"],
+      },
+    }),
+    // electron-installer-{debian,redhat} generate the .desktop entry, install
+    // the icon under hicolor (named after `name`, so Icon= resolves), and drop
+    // a /usr/bin/ai-fox launcher. The .desktop basename (ai-fox.desktop) equals
+    // app.setName("ai-fox") in main.ts, so Wayland app_id matching just works.
+    new MakerDeb({
+      options: {
+        name: "ai-fox",
+        productName: "AiFox",
+        genericName: "AI Traffic Debugger",
+        description:
+          "Debug and visualize AI/LLM HTTP traffic, prompts, MCP calls and tool calls.",
+        icon: "./assets/logo/png/relay-512.png",
+        categories: ["Development", "Utility"],
+        bin: "ai-fox",
+        section: "devel",
+        maintainer: "zerx-lab",
+      },
+    }),
+    new MakerRpm({
+      options: {
+        name: "ai-fox",
+        productName: "AiFox",
+        genericName: "AI Traffic Debugger",
+        description:
+          "Debug and visualize AI/LLM HTTP traffic, prompts, MCP calls and tool calls.",
+        icon: "./assets/logo/png/relay-512.png",
+        categories: ["Development", "Utility"],
+        bin: "ai-fox",
+        license: "MIT",
       },
     }),
     new MakerSquirrel({

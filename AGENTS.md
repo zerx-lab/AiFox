@@ -76,7 +76,9 @@ Go struct → openapi.yaml → schema.ts → client.ts → renderer
 
 ## 发行包格式
 
-Forge maker 产出（`task make`）：AppImage（Linux）、Squirrel.Windows（Win）、ZIP（三平台备用）。Forge 生态里**没有 pacman maker**（到 2026：`@reforged/maker-pacman` 不存在，`@electron-forge/maker-pkgbuild` 也不存在），所以 Arch 走独立路径：`task build:arch` → `scripts/make-arch.sh`。
+Forge maker 产出（`task make`）：`.deb` / `.rpm` / AppImage（Linux）、Squirrel.Windows（Win）、ZIP（三平台备用）。Forge 生态里**没有 pacman maker**（到 2026：`@reforged/maker-pacman` 不存在，`@electron-forge/maker-pkgbuild` 也不存在），所以 Arch 走独立路径：`task build:arch` → `scripts/make-arch.sh`。
+
+**桌面注册（关键）**：AppImage 是便携单文件，**双击/命令行能跑但不会在应用菜单里注册**（系统集成要靠 AppImageLauncher 之类外部工具）。要让应用像原生程序一样进菜单，必须装 `.deb`/`.rpm`（`MakerDeb`/`MakerRpm`，底层 `electron-installer-debian`/`-redhat`）——它们的安装脚本会写 `/usr/share/applications/ai-fox.desktop`、hicolor 图标集、`/usr/bin/ai-fox` 启动器。`.desktop` 的 basename（`ai-fox`）= `app.setName("ai-fox")` 的 app_id，Wayland 任务栏图标匹配才成立；`Icon=ai-fox` 也要对上装进 hicolor 的 `ai-fox.png`。改 deb/rpm 的菜单元数据在 `forge.config.ts` 的 `MakerDeb`/`MakerRpm` options 里（`productName`/`genericName`/`categories`/`icon`/`bin`）。CI 在 Linux runner 上需 `dpkg fakeroot rpm` 三件套。
 
 脚本拿 `task build` 产出的 `out/relay-linux-<node-arch>/` 当预编译产物，现生成 PKGBUILD（`package()` 只拷贝不编译，跟 electron-builder 同路子），调 `makepkg` 出 `out/make/arch/relay-<version>-1-<pkg-arch>.pkg.tar.zst`。布局：`/opt/relay/`（全套）、`/usr/bin/relay` 软链、`/usr/share/applications/relay.desktop`、`/usr/share/icons/hicolor/<size>/apps/relay.png`。
 

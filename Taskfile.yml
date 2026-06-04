@@ -161,23 +161,25 @@ tasks:
       - assets/logo/png/relay-512.png
 
   install:desktop:
-    desc: Install hicolor icons + relay.desktop into ~/.local/share (Linux dev only)
+    desc: Install hicolor icons + ai-fox.desktop into ~/.local/share (Linux dev only)
     platforms: [linux]
     deps: [icons]
     cmds:
+      # Install under the "ai-fox" name so the icon resolves (Icon=ai-fox) and
+      # the desktop basename matches app.setName("ai-fox") for Wayland app_id.
       - for: [16, 32, 48, 64, 128, 256, 512]
-        cmd: install -Dm644 assets/logo/png/relay-{{.ITEM}}.png "$HOME/.local/share/icons/hicolor/{{.ITEM}}x{{.ITEM}}/apps/relay.png"
-      - install -Dm644 assets/logo/relay.desktop "$HOME/.local/share/applications/relay.desktop"
+        cmd: install -Dm644 assets/logo/png/relay-{{.ITEM}}.png "$HOME/.local/share/icons/hicolor/{{.ITEM}}x{{.ITEM}}/apps/ai-fox.png"
+      - install -Dm644 assets/relay.desktop "$HOME/.local/share/applications/ai-fox.desktop"
       - gtk-update-icon-cache -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
       - update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 
   uninstall:desktop:
-    desc: Remove the dev-installed hicolor icons + relay.desktop
+    desc: Remove the dev-installed hicolor icons + ai-fox.desktop
     platforms: [linux]
     cmds:
       - for: [16, 32, 48, 64, 128, 256, 512]
-        cmd: rm -f "$HOME/.local/share/icons/hicolor/{{.ITEM}}x{{.ITEM}}/apps/relay.png"
-      - rm -f "$HOME/.local/share/applications/relay.desktop"
+        cmd: rm -f "$HOME/.local/share/icons/hicolor/{{.ITEM}}x{{.ITEM}}/apps/ai-fox.png"
+      - rm -f "$HOME/.local/share/applications/ai-fox.desktop"
       - gtk-update-icon-cache -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
       - update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 
