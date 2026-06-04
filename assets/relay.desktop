@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=Relay
-GenericName=Relay Desktop
-Comment=Relay desktop scaffold (Go backend + Electron renderer)
+Name=AiFox
+GenericName=AI Traffic Debugger
+Comment=Debug and visualize AI/LLM HTTP traffic, prompts, MCP calls and tool calls
 Exec=ai-fox %U
-Icon=relay
+Icon=ai-fox
 Terminal=false
 Categories=Development;Utility;
 StartupNotify=true

@@ -4,10 +4,16 @@
 # (e.g. v0.2.0) and the workflow will:
 #   1. Build the Go sidecar for the runner's OS/arch.
 #   2. Run `task make` to produce installers via Electron Forge:
-#        - linux   -> AppImage         (out/make/AppImage/x64/*.AppImage)
-#                  -> Arch package     (out/make/arch/*.pkg.tar.zst)
-#        - windows -> Squirrel.Windows (out/make/squirrel.windows/x64/*Setup.exe)
+#        - linux   -> .deb              (out/make/deb/x64/*.deb)
+#                  -> .rpm              (out/make/rpm/x64/*.rpm)
+#                  -> AppImage          (out/make/AppImage/x64/*.AppImage)
+#                  -> Arch package      (out/make/arch/*.pkg.tar.zst)
+#        - windows -> Squirrel.Windows  (out/make/squirrel.windows/x64/*Setup.exe)
 #      ZIPs are also produced as portable fallbacks.
+#
+#   The .deb/.rpm packages register the app in the desktop menu on install
+#   (.desktop entry + hicolor icons + /usr/bin shim). The AppImage is a
+#   portable single file with no system registration.
 #   3. Upload each platform's `out/make/` tree as a workflow artifact.
 #   4. Attach all artifacts to a freshly-created draft GitHub Release tagged
 #      with the chosen version.
@@ -84,15 +90,16 @@ jobs:
       #   - rsvg-convert:  rendered by `task icons` (a `task make` dep).
       #   - mksquashfs:    required by @reforged/maker-appimage to assemble
       #                    the AppImage squashfs payload. Linux-only.
-      #   - base-devel:    provides makepkg and the standard build toolchain
-      #                    needed by `task build:arch` to produce the pacman
-      #                    package. fakeroot handles the package() ownership
-      #                    manipulation without requiring root. Linux-only.
+      #   - dpkg/fakeroot: electron-installer-debian (MakerDeb) shells out to
+      #                    dpkg + fakeroot to assemble the .deb. fakeroot is
+      #                    reused by `task build:arch` / makepkg below too.
+      #   - rpm:           provides rpmbuild, required by electron-installer-
+      #                    redhat (MakerRpm) to assemble the .rpm.
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y librsvg2-bin squashfs-tools
+          sudo apt-get install -y librsvg2-bin squashfs-tools dpkg fakeroot rpm
 
       # Bootstrap a minimal Arch Linux environment so we can call `makepkg`.
       # We use `setup-archlinux` which runs an Arch container action; the Go
@@ -180,6 +187,7 @@ jobs:
           mkdir -p release-assets
           find artifacts -type f \
             \( -iname '*.AppImage' -o -iname '*.pkg.tar.zst' \
+               -o -iname '*.deb' -o -iname '*.rpm' \
                -o -iname '*Setup.exe' -o -iname '*.nupkg' \
                -o -iname 'RELEASES' -o -iname '*.zip' \) \
             -exec cp -v {} release-assets/ \;
