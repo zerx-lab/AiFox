@@ -46,6 +46,7 @@ export const zhCN: Dictionary = {
   },
   detail: {
     selectPrompt: "在左侧列表选一条请求查看详情。",
+    loading: "加载中…",
     tabs: {
       overview: "概览",
       cache: "缓存",

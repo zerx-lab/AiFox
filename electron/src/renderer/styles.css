@@ -618,6 +618,14 @@ textarea {
   min-width: 0;
   overflow: hidden;
 }
+/* Message-area placeholder while the full analysis loads after a selection
+   change. Top-aligned so the header/turn-strip above stay put and the center
+   pane doesn't collapse to the empty state mid-switch. */
+.tl-loading {
+  padding: 24px 18px;
+  color: var(--fg-3);
+  font-size: 12px;
+}
 .tl-header {
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
@@ -2586,6 +2594,15 @@ textarea {
   color: var(--fg-3);
   font-size: 12px;
   padding: 24px;
+  text-align: center;
+}
+/* Shown inside `.detail-body` while the full entry loads after a selection
+   change. Top-aligned (not centered) so it can't grow the scroll area and the
+   panel stays put as content swaps in. */
+.detail-loading {
+  color: var(--fg-3);
+  font-size: 12px;
+  padding: 24px 0;
   text-align: center;
 }
 

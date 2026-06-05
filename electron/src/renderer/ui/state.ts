@@ -139,9 +139,15 @@ const listeners = new Set<Listener>();
 // whether to rebuild, instead of the whole app re-mounting on every event.
 //   struct — list/session structure: add/remove entry, sessionId/status/model
 //            flip, sessions, breakpoints. Drives sidebar / filter pills / bottom.
-//   sel    — selection + selected-entry detail: selectedId, selectedEntry,
-//            selection, detailTab, centerView, expandedMessages. Drives the
-//            (expensive) timeline + detail panes.
+//   sel    — selection + selected-entry identity: selectedId, selectedEntry,
+//            selection, selectedSessionId, centerView, expandedMessages,
+//            replayOpen. Drives the (expensive) timeline + detail panes.
+//   detail — right-pane-only inspector state: detailTab, cacheStyle. Drives
+//            ONLY the detail region, so switching a tab (or the cache view
+//            style) no longer churns the sidebar/timeline. The detail region
+//            also reconciles in place (keeps the `.detail-body` element
+//            identity and swaps only its children), so a tab switch never tears
+//            down the whole panel — that wholesale teardown was the flicker.
 //   ui     — chrome / filters / layout: view, filters, expanded sets, bottom
 //            pane geometry, proxy/settings/env, rename. Drives most regions.
 //   meta   — per-entry token/size ticks that only the statusbar totals consume;
@@ -151,7 +157,7 @@ const listeners = new Set<Listener>();
 //            ONLY by an in-place DOM append in app.ts (the live Response view),
 //            never by a region rebuild, so watching a stream never re-highlights
 //            the whole body nor destroys the user's text selection.
-export const versions = { struct: 0, sel: 0, ui: 0, meta: 0, body: 0 };
+export const versions = { struct: 0, sel: 0, ui: 0, meta: 0, body: 0, detail: 0 };
 type VKind = keyof typeof versions;
 
 function touch(...kinds: VKind[]) {
@@ -169,8 +175,8 @@ const KEY_VERSION: Record<keyof AppState, VKind> = {
   renamingSessionId: "ui",
   selectedId: "sel",
   selection: "sel",
-  detailTab: "sel",
-  cacheStyle: "sel",
+  detailTab: "detail",
+  cacheStyle: "detail",
   bottomTab: "ui",
   bottomCollapsed: "ui",
   bottomHeight: "ui",
@@ -224,12 +230,12 @@ export function selectToolUse(messageKey: string, toolUseId: string) {
 
 export function setDetailTab(tab: DetailTab) {
   state.detailTab = tab;
-  touch("sel");
+  touch("detail");
 }
 
 export function setCacheStyle(style: CacheStyle) {
   state.cacheStyle = style;
-  touch("sel");
+  touch("detail");
 }
 
 export function setBottomTab(tab: BottomTab) {

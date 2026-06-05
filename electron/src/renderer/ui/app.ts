@@ -34,6 +34,10 @@ interface Region {
   build: () => HTMLElement;
   el: HTMLElement;
   key: string;
+  // Optional in-place updater. When present and it returns true, the region's
+  // root element is kept (no replaceWith) — used by the detail panel to swap
+  // only its inner body, preserving element identity so the panel doesn't flash.
+  reconcile?: (oldEl: HTMLElement, newEl: HTMLElement) => boolean;
 }
 
 const SCROLL_SELECTORS = [
@@ -56,9 +60,13 @@ export function mountApp(root: HTMLElement) {
 
   const depsKey = (deps: VKind[]) => deps.map((d) => versions[d]).join(":");
 
-  const region = (deps: VKind[], build: () => HTMLElement): HTMLElement => {
+  const region = (
+    deps: VKind[],
+    build: () => HTMLElement,
+    reconcile?: (oldEl: HTMLElement, newEl: HTMLElement) => boolean,
+  ): HTMLElement => {
     const el = build();
-    regions.push({ deps, build, el, key: depsKey(deps) });
+    regions.push({ deps, build, el, key: depsKey(deps), reconcile });
     return el;
   };
 
@@ -80,7 +88,7 @@ export function mountApp(root: HTMLElement) {
       // bottom-pane (console/problems) reads meta fields (token sub-lines,
       // warningCount, hasResponseError) so it must rebuild on meta ticks too.
       const bottom = region(["struct", "ui", "meta"], renderBottomPane);
-      const detail = region(["sel", "ui"], renderDetail);
+      const detail = region(["sel", "ui", "detail"], renderDetail, reconcileDetail);
       const center = h("div.center-stack", null, filterPills, timeline, bottom);
       mainChild = h("div.view-traffic", null, sidebar, center, detail);
     }
@@ -128,6 +136,13 @@ export function mountApp(root: HTMLElement) {
       if (holdsEditingFocus(r.el)) continue;
       r.key = key;
       const next = r.build();
+      // A region with a reconciler (the detail panel) updates its existing
+      // element in place — keeping the scrollable, syntax-highlighted
+      // `.detail-body` layer alive instead of tearing the whole subtree down.
+      // That wholesale teardown/recreate is what flashed the right pane on
+      // every tab switch. reconcile returns false when the structure changed
+      // (empty ↔ filled) so we fall back to a full replace.
+      if (r.reconcile?.(r.el, next)) continue;
       const snap = snapshotScrolls(r.el);
       r.el.replaceWith(next);
       restoreScrolls(next, snap);
@@ -158,6 +173,37 @@ export function mountApp(root: HTMLElement) {
   fullRender();
   onChange(schedule);
   onLanguageChange(fullRender);
+}
+
+// reconcileDetail updates the right-hand inspect panel in place. The detail
+// region rebuilds on a selection change AND on a tab / cache-style change;
+// replacing the whole `aside.detail` subtree each time tore down `.detail-body`
+// (a scrollable, often syntax-highlighted compositing layer) and recreated it
+// empty for a frame — the flicker the user saw when switching tabs. Instead we
+// keep the panel root, replace the tiny head/tabs wholesale (no scroll area →
+// no flash) and move only the freshly-built body's children into the existing
+// `.detail-body`, so its element identity and layer survive. Returns false when
+// the structure changed (selection cleared/loaded toggles between the empty
+// state and the full panel), letting the caller fall back to a full replace.
+function reconcileDetail(oldEl: HTMLElement, newEl: HTMLElement): boolean {
+  const oldBody = oldEl.querySelector<HTMLElement>(".detail-body");
+  const newBody = newEl.querySelector<HTMLElement>(".detail-body");
+  const oldHead = oldEl.querySelector<HTMLElement>(".detail-head");
+  const newHead = newEl.querySelector<HTMLElement>(".detail-head");
+  const oldTabs = oldEl.querySelector<HTMLElement>(".detail-tabs");
+  const newTabs = newEl.querySelector<HTMLElement>(".detail-tabs");
+  if (!oldBody || !newBody || !oldHead || !newHead || !oldTabs || !newTabs) {
+    return false;
+  }
+  oldHead.replaceWith(newHead);
+  oldTabs.replaceWith(newTabs);
+  // Preserve the scroll position across an in-place body refresh — e.g.
+  // expanding a timeline message bumps `sel`, which also rebuilds detail.
+  const top = oldBody.scrollTop;
+  clear(oldBody);
+  while (newBody.firstChild) oldBody.appendChild(newBody.firstChild);
+  oldBody.scrollTop = top;
+  return true;
 }
 
 // patchLiveBody appends the newly-streamed response bytes to the live <pre>

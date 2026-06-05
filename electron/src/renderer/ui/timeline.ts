@@ -41,18 +41,38 @@ export function renderTimeline(): HTMLElement {
   const entry = selectedFull();
 
   if (!entry) {
-    return h(
-      "div.timeline",
-      null,
-      viewSwitcher(state.centerView),
-      h(
-        "div.tl-empty",
+    // Loading window after an entry-switch: selectedId is set but the full
+    // analysis hasn't been fetched yet. Keep the stable shell — a lightweight
+    // header + the turn strip (both derivable from the EntryMeta already in the
+    // list) + the view switcher — and show a loading placeholder for the
+    // message area, instead of collapsing the whole center pane to the empty
+    // state. That collapse is what flashed the center pane on every
+    // entry-switch (the sibling of the detail-pane flicker). The genuine
+    // "nothing selected" case still shows the empty hint.
+    const meta = state.selectedId
+      ? state.entries.find((e) => e.id === state.selectedId)
+      : undefined;
+    if (!meta) {
+      return h(
+        "div.timeline",
         null,
-        h("div.tl-empty-mark"),
-        h("div.tl-empty-title", null, t("timeline.emptyTitle")),
-        h("div.tl-empty-hint", null, t("timeline.emptyHint")),
-      ),
-    );
+        viewSwitcher(state.centerView),
+        h(
+          "div.tl-empty",
+          null,
+          h("div.tl-empty-mark"),
+          h("div.tl-empty-title", null, t("timeline.emptyTitle")),
+          h("div.tl-empty-hint", null, t("timeline.emptyHint")),
+        ),
+      );
+    }
+    const skeleton = h("div.timeline");
+    skeleton.appendChild(renderHeaderMeta(meta));
+    const skelBar = renderEntryBar(meta);
+    if (skelBar) skeleton.appendChild(skelBar);
+    skeleton.appendChild(viewSwitcher(state.centerView));
+    skeleton.appendChild(h("div.tl-loading", null, t("detail.loading")));
+    return skeleton;
   }
 
   const root = h("div.timeline");
@@ -147,11 +167,34 @@ function renderHeader(entry: TrafficEntry): HTMLElement {
   );
 }
 
+// Lightweight header for the loading skeleton, derived from the EntryMeta list
+// projection. Mirrors renderHeader's shape (model line + a couple of chips)
+// closely enough that the turn strip below it doesn't shift when the full
+// header swaps in once the analysis loads.
+function renderHeaderMeta(meta: EntryMeta): HTMLElement {
+  const chips: HTMLElement[] = [];
+  if (meta.statusCode > 0) {
+    chips.push(chip(`${meta.statusCode}`, meta.statusCode < 400 ? "ok" : "err"));
+  }
+  if (meta.durationMillis > 0) chips.push(chip(fmtDuration(meta.durationMillis)));
+  return h(
+    "div.tl-header",
+    null,
+    h(
+      "div.tl-header-top",
+      null,
+      h("span.tl-model", null, meta.model || "—"),
+      h("span.tl-endpoint", null, `${meta.method} ${meta.url || ""}`),
+    ),
+    h("div.tl-chips", null, ...chips),
+  );
+}
+
 // When the current entry belongs to a multi-turn session, render a horizontal
 // strip of chips — one per turn — so the user can hop between calls without
 // opening the sidebar tree. Hidden for solo / unsessioned entries; the chips
 // would be visual noise.
-function renderEntryBar(entry: TrafficEntry): HTMLElement | null {
+function renderEntryBar(entry: { id: string }): HTMLElement | null {
   const state = getState();
   const session = state.sessions.find((s) => (s.entryIds ?? []).includes(entry.id));
   if (!session) return null;

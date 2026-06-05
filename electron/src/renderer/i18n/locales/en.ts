@@ -46,6 +46,7 @@ export const en = {
   },
   detail: {
     selectPrompt: "Select a request from the list to inspect it.",
+    loading: "Loading…",
     tabs: {
       overview: "Overview",
       cache: "Cache",

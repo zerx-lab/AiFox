@@ -17,6 +17,13 @@ import {
   type SessionSummary,
   type TrafficEntry,
 } from "./state";
+
+// Fields detailHead renders — shared by the full TrafficEntry and the
+// lightweight EntryMeta so the loading skeleton can reuse the same header.
+type DetailHeadFields = Pick<
+  TrafficEntry,
+  "method" | "url" | "statusCode" | "durationMillis" | "startedAt" | "streaming"
+>;
 import { renderTokens } from "./tokens";
 import { renderTools } from "./tools";
 
@@ -30,10 +37,30 @@ export function renderDetail(): HTMLElement {
   const entry = selectedFull();
 
   if (!entry) {
+    // selectedId is set but the full body/analysis hasn't been fetched yet.
+    // Render a stable skeleton — head from the lightweight EntryMeta already in
+    // the list plus a loading body — instead of collapsing to the empty prompt.
+    // Switching turns/entries always passes through this state; the empty prompt
+    // here is what made the whole right pane flash blank for a frame. The
+    // skeleton keeps the same head/tabs/body structure as the loaded panel, so
+    // reconcileDetail (app.ts) swaps it in place once data lands — no flicker.
+    // Only a genuinely empty selection falls through to the prompt.
+    const meta = state.selectedId
+      ? state.entries.find((e) => e.id === state.selectedId)
+      : undefined;
+    if (!meta) {
+      return h(
+        "aside.detail",
+        null,
+        h("div.detail-empty", null, t("detail.selectPrompt")),
+      );
+    }
     return h(
       "aside.detail",
       null,
-      h("div.detail-empty", null, t("detail.selectPrompt")),
+      detailHead(meta),
+      detailTabs("overview", meta.hasStructured),
+      h("div.detail-body", null, h("div.detail-loading", null, t("detail.loading"))),
     );
   }
 
@@ -56,7 +83,7 @@ export function renderDetail(): HTMLElement {
   );
 }
 
-function detailHead(entry: TrafficEntry): HTMLElement {
+function detailHead(entry: DetailHeadFields): HTMLElement {
   const url = entry.url || "—";
   return h(
     "div.detail-head",
