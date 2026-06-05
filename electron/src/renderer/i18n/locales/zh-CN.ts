@@ -73,6 +73,9 @@ export const zhCN: Dictionary = {
     responseHeaders: "响应 headers",
     body: "Body",
     bodyEmpty: "（空）",
+    copy: "复制",
+    copied: "已复制",
+    streamFoldDisabled: "大型流已关闭折叠（{count} 个事件）",
     pending: "进行中…",
     usageInput: "输入",
     usageOutput: "输出",
@@ -136,6 +139,9 @@ export const zhCN: Dictionary = {
     tokensCalcColRate: "单价",
     tokensCalcColCost: "小计",
     tokensCalcTotal: "合计",
+  },
+  layout: {
+    resizeColumn: "拖动调整宽度",
   },
   timeline: {
     emptyTitle: "选一条请求",

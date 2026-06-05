@@ -6,6 +6,7 @@
 import type { components } from "../../api/client";
 import { t } from "../i18n";
 import { renderCache } from "./cache";
+import { colResizeHandle } from "./col-resize";
 import { h } from "./dom";
 import { fmtBytes, fmtClock, fmtDuration, isPending } from "./format";
 import { renderRawRequest, renderRawResponse } from "./raw-http";
@@ -52,12 +53,14 @@ export function renderDetail(): HTMLElement {
       return h(
         "aside.detail",
         null,
+        colResizeHandle("right"),
         h("div.detail-empty", null, t("detail.selectPrompt")),
       );
     }
     return h(
       "aside.detail",
       null,
+      colResizeHandle("right"),
       detailHead(meta),
       detailTabs("overview", meta.hasStructured),
       h("div.detail-body", null, h("div.detail-loading", null, t("detail.loading"))),
@@ -77,6 +80,7 @@ export function renderDetail(): HTMLElement {
   return h(
     "aside.detail",
     null,
+    colResizeHandle("right"),
     detailHead(entry),
     detailTabs(tab, hasAnthropic),
     h("div.detail-body", null, renderTabBody(entry, tab)),

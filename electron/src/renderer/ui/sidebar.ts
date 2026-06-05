@@ -7,6 +7,7 @@
 
 import { getClient } from "../../api/client";
 import { t } from "../i18n";
+import { colResizeHandle } from "./col-resize";
 import { h } from "./dom";
 import { fmtDuration, fmtSessionStamp, fmtTime, statusKind } from "./format";
 import { applyFilter } from "./grouping";
@@ -72,7 +73,15 @@ export function renderSidebar(): HTMLElement {
     ),
   );
 
-  return h("div.sidebar", null, head, h("div.side-filter", null, filterInput), actions, list);
+  return h(
+    "div.sidebar",
+    null,
+    head,
+    h("div.side-filter", null, filterInput),
+    actions,
+    list,
+    colResizeHandle("left"),
+  );
 }
 
 function appendSessionList(

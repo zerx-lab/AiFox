@@ -76,6 +76,12 @@ export interface AppState {
   bottomTab: BottomTab;
   bottomCollapsed: boolean;
   bottomHeight: number;
+  // Sidebar (left) and detail (right) column widths in px. null = use the
+  // stylesheet's responsive default; a number means the user has dragged the
+  // column to an explicit width, applied as an inline --col-* override on the
+  // shell so it wins over the responsive media-query defaults.
+  colLeft: number | null;
+  colRight: number | null;
   centerView: CenterView;
   filter: string;
   filters: TrafficFilter;
@@ -89,6 +95,11 @@ export interface AppState {
   // single long prompt does not blow out the scroll height of the center
   // pane; the user expands the cards they actually want to read.
   expandedMessages: Set<string>;
+  // JSON body fold state. Holds the keys (`<entryId>|<kind>|<path>`) of tree
+  // nodes whose fold differs from their default, so collapse/expand survives the
+  // detail panel rebuilding. Mutated in place by the tree's click handler WITHOUT
+  // a version bump (the DOM is already updated), then re-read on the next build.
+  jsonFold: Set<string>;
   replayOpen: boolean;
   breakpoints: Breakpoint[];
   pausedRequests: PausedRequest[];
@@ -114,12 +125,15 @@ const state: AppState = {
   bottomTab: "console",
   bottomCollapsed: false,
   bottomHeight: 200,
+  colLeft: null,
+  colRight: null,
   centerView: "timeline",
   filter: "",
   filters: { text: "", streaming: false, errors: false, model: "" },
   collapsedGroups: new Set<string>(),
   expandedSessions: new Set<string>(),
   expandedMessages: new Set<string>(),
+  jsonFold: new Set<string>(),
   replayOpen: false,
   breakpoints: [],
   pausedRequests: [],
@@ -157,7 +171,11 @@ const listeners = new Set<Listener>();
 //            ONLY by an in-place DOM append in app.ts (the live Response view),
 //            never by a region rebuild, so watching a stream never re-highlights
 //            the whole body nor destroys the user's text selection.
-export const versions = { struct: 0, sel: 0, ui: 0, meta: 0, body: 0, detail: 0 };
+//   layout — column widths (colLeft/colRight). Deliberately depended on by NO
+//            render region, so dragging a resize handle re-runs applyColumns()
+//            (which re-reads the fresh width) without rebuilding the expensive
+//            sidebar/detail subtrees on every mousemove.
+export const versions = { struct: 0, sel: 0, ui: 0, meta: 0, body: 0, detail: 0, layout: 0 };
 type VKind = keyof typeof versions;
 
 function touch(...kinds: VKind[]) {
@@ -180,12 +198,15 @@ const KEY_VERSION: Record<keyof AppState, VKind> = {
   bottomTab: "ui",
   bottomCollapsed: "ui",
   bottomHeight: "ui",
+  colLeft: "layout",
+  colRight: "layout",
   centerView: "sel",
   filter: "ui",
   filters: "ui",
   collapsedGroups: "ui",
   expandedSessions: "ui",
   expandedMessages: "sel",
+  jsonFold: "layout",
   replayOpen: "sel",
   breakpoints: "struct",
   pausedRequests: "struct",
@@ -252,6 +273,29 @@ export function toggleBottomCollapsed() {
 export function setBottomHeight(px: number) {
   state.bottomHeight = Math.max(80, Math.min(600, Math.round(px)));
   touch("ui");
+}
+
+const COL_LEFT_MIN = 180;
+const COL_LEFT_MAX = 640;
+const COL_RIGHT_MIN = 280;
+const COL_RIGHT_MAX = 900;
+
+function clampColumn(px: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(px)));
+}
+
+// setColLeft/setColRight commit the dragged column width every mousemove. They
+// bump only the `layout` slice — which no region depends on — so the drag is
+// smooth (no sidebar/detail rebuild per frame); app.ts's applyColumns() re-reads
+// the value and writes the inline --col-* override.
+export function setColLeft(px: number) {
+  state.colLeft = clampColumn(px, COL_LEFT_MIN, COL_LEFT_MAX);
+  touch("layout");
+}
+
+export function setColRight(px: number) {
+  state.colRight = clampColumn(px, COL_RIGHT_MIN, COL_RIGHT_MAX);
+  touch("layout");
 }
 
 export function setFilters(patch: Partial<TrafficFilter>) {
@@ -419,6 +463,7 @@ export function clearEntries() {
   state.detailTab = "overview";
   state.expandedSessions.clear();
   state.expandedMessages.clear();
+  state.jsonFold.clear();
   touch("struct", "sel", "ui", "meta");
 }
 

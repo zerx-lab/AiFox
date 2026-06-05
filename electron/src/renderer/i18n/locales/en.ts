@@ -73,6 +73,9 @@ export const en = {
     responseHeaders: "Response headers",
     body: "Body",
     bodyEmpty: "(empty)",
+    copy: "Copy",
+    copied: "Copied",
+    streamFoldDisabled: "Folding off for large stream ({count} events)",
     pending: "Pending…",
     usageInput: "Input",
     usageOutput: "Output",
@@ -137,6 +140,9 @@ export const en = {
     tokensCalcColRate: "Rate",
     tokensCalcColCost: "Cost",
     tokensCalcTotal: "Total",
+  },
+  layout: {
+    resizeColumn: "Drag to resize",
   },
   timeline: {
     emptyTitle: "Pick a request",

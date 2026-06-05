@@ -5,7 +5,14 @@
 
 import { t } from "../i18n";
 import { formatBody } from "./body";
+import { h } from "./dom";
 import { highlight } from "./highlight";
+import {
+  renderJsonTree,
+  renderSseTree,
+  SSE_FOLD_MAX_EVENTS,
+  sseEventCount,
+} from "./json-tree";
 import type { TrafficEntry } from "./state";
 
 export function renderRawRequest(entry: TrafficEntry): HTMLElement {
@@ -41,6 +48,10 @@ function renderRaw(
   const pre = document.createElement("pre");
   pre.className = "raw-http";
 
+  // Copy-body affordance: the JSON/SSE tree below is a DOM structure that
+  // copies imperfectly via select-all, so offer an exact copy of the raw bytes.
+  if (body) pre.appendChild(copyButton(body));
+
   // Start line in distinctive color.
   pre.appendChild(span(startLine, kind === "request" ? "rh-req" : "rh-resp"));
   pre.appendChild(text("\n"));
@@ -66,8 +77,7 @@ function renderRaw(
       pre.dataset.liveResponse = "1";
       pre.dataset.renderedLen = String(body.length);
     } else {
-      const formatted = formatBody(body, headers);
-      pre.appendChild(highlight(formatted.text, formatted.kind));
+      appendFormattedBody(pre, body, headers, entry, kind);
     }
   } else {
     if (liveResponse) {
@@ -85,6 +95,80 @@ function renderRaw(
     pre.appendChild(span(`▍ ${t("detail.streamingLive")}`, "rh-streaming"));
   }
   return pre;
+}
+
+// appendFormattedBody renders a finalized body. JSON and SSE payloads become
+// collapsible trees (json-tree.ts); everything else keeps the flat highlighter.
+// A JSON parse failure or an over-long SSE stream falls back to the highlighter
+// so nothing ever renders blank.
+function appendFormattedBody(
+  pre: HTMLElement,
+  body: string,
+  headers: Record<string, string>,
+  entry: TrafficEntry,
+  kind: "request" | "response",
+) {
+  const formatted = formatBody(body, headers);
+  const keyPrefix = `${entry.id}|${kind}`;
+
+  if (formatted.kind === "json") {
+    const parsed = tryParseJson(body);
+    if (parsed.ok) {
+      pre.appendChild(renderJsonTree(parsed.value, { keyPrefix }));
+      return;
+    }
+  } else if (formatted.kind === "sse") {
+    const count = sseEventCount(body);
+    if (count > 0 && count <= SSE_FOLD_MAX_EVENTS) {
+      const tree = renderSseTree(body, { keyPrefix });
+      if (tree) {
+        pre.appendChild(tree);
+        return;
+      }
+    } else if (count > SSE_FOLD_MAX_EVENTS) {
+      // Folding is off for huge streams — say so rather than silently degrading.
+      pre.appendChild(span(`▸ ${t("detail.streamFoldDisabled", { count })}`, "rh-note"));
+      pre.appendChild(text("\n"));
+    }
+  }
+
+  pre.appendChild(highlight(formatted.text, formatted.kind));
+}
+
+function tryParseJson(s: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(s) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function copyButton(raw: string): HTMLElement {
+  const btn = h(
+    "button.rh-copy",
+    {
+      type: "button",
+      title: t("detail.copy"),
+      onclick: async (ev: MouseEvent) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        try {
+          await navigator.clipboard.writeText(raw);
+          const prev = btn.textContent;
+          btn.textContent = t("detail.copied");
+          btn.classList.add("copied");
+          window.setTimeout(() => {
+            btn.textContent = prev;
+            btn.classList.remove("copied");
+          }, 1200);
+        } catch {
+          // Clipboard denied — nothing graceful to do from inside the pane.
+        }
+      },
+    },
+    t("detail.copy"),
+  );
+  return btn;
 }
 
 // isStreamingLive reports a response that is mid-stream (streaming flag set and

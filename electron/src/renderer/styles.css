@@ -448,14 +448,18 @@ textarea {
   grid-template-columns: var(--col-left) minmax(0, 1fr) var(--col-right);
   height: 100%;
 }
+/* Narrower screens shrink the columns via the VARIABLES (not by hardcoding
+   grid-template-columns) so a user-dragged width — applied as an inline
+   --col-* override on .app — still wins at any window size. */
 @media (max-width: 1180px) {
-  .view-traffic {
-    grid-template-columns: var(--col-left) minmax(0, 1fr) 380px;
+  :root {
+    --col-right: 380px;
   }
 }
 @media (max-width: 980px) {
-  .view-traffic {
-    grid-template-columns: 220px minmax(0, 1fr) 340px;
+  :root {
+    --col-left: 220px;
+    --col-right: 340px;
   }
 }
 .view-settings {
@@ -471,6 +475,42 @@ textarea {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
+}
+
+/* ===== Column resize handles ===== */
+.col-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 6;
+  cursor: col-resize;
+}
+.col-resize-left {
+  right: -3px;
+}
+.col-resize-right {
+  left: 0;
+}
+.col-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.col-resize:hover::after,
+body.col-resizing .col-resize::after {
+  background: var(--accent);
+}
+body.col-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 .side-head {
   padding: 12px 14px 6px;
@@ -1617,6 +1657,7 @@ textarea {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  position: relative;
 }
 .detail-head {
   padding: 12px 14px;
@@ -2478,6 +2519,7 @@ textarea {
   max-height: none;
   overflow: auto;
   margin: 0;
+  position: relative;
 }
 .raw-http .rh-req {
   color: var(--accent);
@@ -2529,6 +2571,105 @@ textarea {
 .tok-comment {
   color: var(--fg-4);
   font-style: italic;
+}
+
+/* ===== JSON / SSE fold tree ===== */
+.raw-http .rh-copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 3;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  line-height: 1.4;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg-3);
+  cursor: pointer;
+  opacity: 0.55;
+}
+.raw-http .rh-copy:hover {
+  opacity: 1;
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+.raw-http .rh-copy.copied {
+  opacity: 1;
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.raw-http .rh-note {
+  color: var(--fg-4);
+  font-style: italic;
+}
+/* The tree manages its own indentation via nested blocks, so opt out of the
+   surrounding <pre>'s whitespace preservation. */
+.jt-root,
+.jt-sse {
+  white-space: normal;
+}
+.jt-row,
+.jt-head,
+.jt-foot {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-left: 1em;
+}
+.jt-head {
+  padding-left: 0;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.jt-head:hover {
+  background: rgba(127, 127, 127, 0.09);
+}
+.jt-toggle {
+  display: inline-block;
+  width: 1em;
+  color: var(--fg-4);
+  cursor: pointer;
+  user-select: none;
+}
+.jt-toggle::before {
+  content: "▾";
+}
+.jt-node.collapsed > .jt-head .jt-toggle::before {
+  content: "▸";
+}
+.jt-children {
+  padding-left: 1.25em;
+  border-left: 1px solid var(--border);
+}
+.jt-node.collapsed > .jt-children,
+.jt-node.collapsed > .jt-foot {
+  display: none;
+}
+/* Collapsed-only `…}` hint lives in the head; hidden while expanded. */
+.jt-node > .jt-head .jt-hint {
+  display: none;
+}
+.jt-node.collapsed > .jt-head .jt-hint {
+  display: inline;
+}
+.jt-hint {
+  color: var(--fg-4);
+}
+.jt-count {
+  color: var(--fg-4);
+  font-style: italic;
+}
+.jt-event {
+  margin-bottom: 8px;
+}
+.jt-event-name {
+  color: var(--accent);
+  font-weight: 500;
+}
+.jt-data-label {
+  margin-top: 1px;
 }
 
 .headers {

@@ -104,6 +104,7 @@ export function mountApp(root: HTMLElement) {
       statusbar,
     );
     applyBottomHeight();
+    applyColumns();
     return shellEl;
   }
 
@@ -111,6 +112,19 @@ export function mountApp(root: HTMLElement) {
     const state = getState();
     const hgt = state.bottomCollapsed ? 0 : state.bottomHeight;
     shellEl.style.setProperty("--bottom-h", `${hgt}px`);
+  }
+
+  // applyColumns writes the user's dragged sidebar/detail widths as inline
+  // --col-* overrides on the shell. Null means "not resized": we clear the
+  // override so the stylesheet's responsive media-query defaults take over.
+  // Runs on every sync (cheap, no region rebuild) so a `layout` bump from a
+  // resize drag reflects immediately without churning the panels.
+  function applyColumns() {
+    const state = getState();
+    if (state.colLeft != null) shellEl.style.setProperty("--col-left", `${state.colLeft}px`);
+    else shellEl.style.removeProperty("--col-left");
+    if (state.colRight != null) shellEl.style.setProperty("--col-right", `${state.colRight}px`);
+    else shellEl.style.removeProperty("--col-right");
   }
 
   function fullRender() {
@@ -125,6 +139,7 @@ export function mountApp(root: HTMLElement) {
       return;
     }
     applyBottomHeight();
+    applyColumns();
     for (const r of regions) {
       const key = depsKey(r.deps);
       if (key === r.key) continue;
