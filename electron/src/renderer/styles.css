@@ -150,11 +150,9 @@ textarea {
   overflow: hidden;
 }
 .titlebar-brand-mark {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  background: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-deep);
+  width: 16px;
+  height: 16px;
+  display: block;
   flex-shrink: 0;
 }
 .titlebar-title {
