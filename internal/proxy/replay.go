@@ -107,6 +107,12 @@ func (c *Controller) Replay(ctx context.Context, originalID string, overrides Re
 		if isAuthHeader(k) {
 			continue
 		}
+		// Drop the client's session-affinity header: the replay is a fresh
+		// session (keyed by ReplayedFromID in the aggregator), and forwarding a
+		// stale sticky-routing token upstream serves no purpose.
+		if http.CanonicalHeaderKey(k) == "X-Session-Affinity" {
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Accept-Encoding", "identity")
@@ -209,7 +215,9 @@ func captureToStore(ctx context.Context, body io.Reader, entryID string, st *sto
 	var captured bytes.Buffer
 	totalBytes := int64(0)
 	truncated := false
-	var lastAnalyzeAt time.Time
+	// Geometric size-doubling analysis trigger, same as captureAndStream: bounds
+	// total in-stream parse work to O(size) instead of O(size × duration).
+	var nextAnalyzeLen int
 
 	for {
 		n, err := body.Read(buf)
@@ -225,10 +233,12 @@ func captureToStore(ctx context.Context, body io.Reader, entryID string, st *sto
 			default:
 				captured.Write(buf[:n])
 			}
-			now := time.Now()
-			shouldAnalyze := lastAnalyzeAt.IsZero() || now.Sub(lastAnalyzeAt) >= analyzeInterval
+			shouldAnalyze := captured.Len() >= nextAnalyzeLen
 			if shouldAnalyze {
-				lastAnalyzeAt = now
+				nextAnalyzeLen = captured.Len() * 2
+				if nextAnalyzeLen < firstAnalyzeBytes {
+					nextAnalyzeLen = firstAnalyzeBytes
+				}
 			}
 			snapshot := captured.String()
 			st.Update(entryID, func(e *store.Entry) {

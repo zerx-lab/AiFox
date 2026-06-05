@@ -68,6 +68,28 @@ type Entry struct {
 // MaxBodyBytes caps the per-direction body size we keep in memory.
 const MaxBodyBytes = 1 << 20 // 1 MiB
 
+// clone returns an immutable snapshot of e suitable for handing to readers
+// outside the store lock. It is a shallow struct copy, which is race-safe
+// ONLY because of three invariants the rest of the codebase upholds:
+//
+//   - String fields (RequestBody/ResponseBody/...) are immutable values; the
+//     proxy reassigns the FIELD under s.mu, never mutates the backing array.
+//   - The header maps are write-once: built fresh (headerMap) and assigned
+//     once, never mutated afterwards, so sharing the map across clones is safe
+//     for read-only consumers.
+//   - Analysis is copy-on-write: llmparse.Analyze returns a fresh *Analysis on
+//     every run and the proxy reassigns e.Analysis to it; the pointee is never
+//     mutated in place, so a captured pointer is stable.
+//
+// Because the live *Entry in idIndex is NEVER handed out (only clones are),
+// concurrent reads by subscribers/Get/List can never race the proxy's locked
+// writes. This is the single mechanism that makes the streaming hot path
+// race-free; do not hand out the live pointer.
+func (e *Entry) clone() *Entry {
+	c := *e
+	return &c
+}
+
 // Store is a bounded ring buffer of Entry plus a fan-out for live subscribers.
 // Methods are safe to call from multiple goroutines.
 type Store struct {
@@ -143,12 +165,15 @@ func (s *Store) Add(e *Entry) {
 	s.entries = append(s.entries, e)
 	s.idIndex[e.ID] = e
 	shouldPersist := s.markPersistableLocked(e)
+	// Snapshot under the lock so subscribers never touch the live pointer the
+	// proxy keeps mutating. See Entry.clone for why this is race-safe.
+	snap := e.clone()
 	s.mu.Unlock()
 
 	if shouldPersist {
-		s.appendToFile(e)
+		s.appendToFile(snap)
 	}
-	s.broadcast(e)
+	s.broadcast(snap)
 }
 
 // Update applies fn to the entry identified by id and re-broadcasts it.
@@ -157,36 +182,44 @@ func (s *Store) Update(id string, fn func(*Entry)) {
 	s.mu.Lock()
 	e, ok := s.idIndex[id]
 	var shouldPersist bool
+	var snap *Entry
 	if ok {
 		fn(e)
 		shouldPersist = s.markPersistableLocked(e)
+		snap = e.clone()
 	}
 	s.mu.Unlock()
 	if ok {
 		if shouldPersist {
-			s.appendToFile(e)
+			s.appendToFile(snap)
 		}
-		s.broadcast(e)
+		s.broadcast(snap)
 	}
 }
 
-// List returns a copy of the buffer, newest first.
+// List returns a snapshot of the buffer, newest first. Entries are clones so
+// callers can read them without racing the proxy's in-stream mutations.
 func (s *Store) List() []*Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Entry, len(s.entries))
 	for i, e := range s.entries {
-		out[len(s.entries)-1-i] = e
+		out[len(s.entries)-1-i] = e.clone()
 	}
 	return out
 }
 
-// Get returns the entry with the given id (and true) or nil/false.
+// Get returns an immutable clone of the entry with the given id (and true) or
+// nil/false. Returning a clone (not the live pointer) keeps readers race-free
+// against the proxy writing the same entry under the lock.
 func (s *Store) Get(id string) (*Entry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	e, ok := s.idIndex[id]
-	return e, ok
+	if !ok {
+		return nil, false
+	}
+	return e.clone(), true
 }
 
 // Clear discards every retained entry. Live subscribers stay subscribed.
@@ -221,11 +254,40 @@ func (s *Store) Clear() {
 	}
 }
 
-// Subscribe returns a channel that receives Entry pointers as they are added
-// or updated, along with an unsubscribe function. The channel has a small
-// buffer; slow consumers will drop events rather than block producers.
+// MapAnalysis applies fn to every retained entry's Analysis field under the
+// lock, replacing it with fn's result. It exists so the caller can re-type
+// entries restored from disk (whose Analysis decodes as map[string]any) back
+// into the concrete *llmparse.Analysis without coupling the store to the
+// parser — fn is supplied by the caller (see llmparse.ReifyAnalysis). Intended
+// to run once on boot, before subscribers attach.
+func (s *Store) MapAnalysis(fn func(any) any) {
+	if fn == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.entries {
+		e.Analysis = fn(e.Analysis)
+	}
+}
+
+// Subscribe returns a channel that receives Entry clones as they are added or
+// updated, along with an unsubscribe function. The channel has a small buffer;
+// slow consumers drop events rather than block the proxy hot path. Use it for
+// best-effort live views (the SSE writer coalesces + reconciles on top).
 func (s *Store) Subscribe() (<-chan *Entry, func()) {
-	ch := make(chan *Entry, 16)
+	return s.SubscribeBuffer(16)
+}
+
+// SubscribeBuffer is Subscribe with an explicit buffer size. Correctness-
+// critical in-process consumers (the session aggregator) pass a buffer large
+// enough to absorb realistic streaming bursts so bucketing events are not
+// dropped; a periodic reconcile still backstops the rare overflow.
+func (s *Store) SubscribeBuffer(n int) (<-chan *Entry, func()) {
+	if n < 1 {
+		n = 1
+	}
+	ch := make(chan *Entry, n)
 	s.subsMu.Lock()
 	s.subSeq++
 	id := s.subSeq

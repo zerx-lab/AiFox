@@ -226,8 +226,11 @@ func TestStreamingResponseIsCaptured(t *testing.T) {
 }
 
 // TestStreamingAnalysisAppearsBeforeEnd guards the live-conversation behavior:
-// the proxy must run llmparse on partial bodies during the stream so the UI's
-// timeline fills in token by token, not all at once at EOF.
+// the proxy must run llmparse on a partial body during the stream (the first
+// chunk always triggers an analysis) so a structured view exists before EOF.
+// In-stream re-analysis now fires on geometric size thresholds rather than a
+// fixed time interval (see captureAndStream), but the first-chunk analysis that
+// this test asserts is unchanged.
 func TestStreamingAnalysisAppearsBeforeEnd(t *testing.T) {
 	gate := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

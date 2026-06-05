@@ -1338,8 +1338,47 @@ textarea {
 .session-dot.warn {
   background: var(--warn);
 }
+/* Live (in-flight turn): a softly pulsing accent dot so an active session is
+   obvious without reshuffling the list. */
+.session-dot.live {
+  background: var(--accent, var(--ok));
+  animation: session-pulse 1.4s ease-in-out infinite;
+}
+@keyframes session-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent, var(--ok)) 55%, transparent);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, var(--ok)) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-dot.live {
+    animation: none;
+  }
+}
+/* Mixed/primary model chip in the session header. */
+.tree-group-model {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+  padding: 0 4px;
+  margin-left: 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
 .entry-replayed {
   color: var(--user);
+}
+/* Utility sub-task tag (title-gen / tool summary) on an entry row. */
+.entry-utility {
+  color: var(--fg-4);
+  font-style: italic;
 }
 .tree-group-hdr .chev {
   display: inline-block;

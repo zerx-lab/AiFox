@@ -11,6 +11,7 @@ import { fmtBytes, fmtClock, fmtDuration, isPending } from "./format";
 import { renderRawRequest, renderRawResponse } from "./raw-http";
 import {
   getState,
+  selectedFull,
   setDetailTab,
   type DetailTab,
   type SessionSummary,
@@ -24,7 +25,9 @@ type AnthropicUsage = components["schemas"]["AnthropicUsage"];
 
 export function renderDetail(): HTMLElement {
   const state = getState();
-  const entry = state.entries.find((e) => e.id === state.selectedId) ?? null;
+  // selectedFull() returns the loaded full TrafficEntry for the current
+  // selection; null means nothing selected or still loading.
+  const entry = selectedFull();
 
   if (!entry) {
     return h(
@@ -187,7 +190,9 @@ function renderSessionOverview(entry: TrafficEntry): HTMLElement | null {
   const state = getState();
   const session = state.sessions.find((s) => (s.entryIds ?? []).includes(entry.id));
   if (!session) return null;
-  const turns = session.entryIds?.length ?? 0;
+  // turnCount excludes utility sub-tasks (title-gen/summaries) — keep it
+  // consistent with the server's rollup, not a raw entry count.
+  const turns = session.turnCount ?? session.entryIds?.length ?? 0;
   const input = session.inputTokens ?? 0;
   const cacheRead = session.cacheRead ?? 0;
   const cacheCreate = session.cacheCreate ?? 0;

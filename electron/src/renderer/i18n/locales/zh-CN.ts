@@ -42,6 +42,7 @@ export const zhCN: Dictionary = {
     confirmClear: "确定要丢弃全部抓取的流量吗？",
     unsessioned: "其它端点",
     rename: "重命名会话",
+    utilityHint: "子任务调用（标题/摘要）——不计入轮次",
   },
   detail: {
     selectPrompt: "在左侧列表选一条请求查看详情。",
@@ -248,6 +249,8 @@ export const zhCN: Dictionary = {
     problemsNone: "没有发现问题。",
     problemHttpErr: "{url} 返回了错误状态码",
     problemToolErr: "tool_result 标记为 is_error=true",
+    problemApiErr: "响应体中的上游 API 错误",
+    problemWarnings: "{count} 条解析告警 — 点开查看",
     breakpointsPlaceholder: "断点功能将在后续里程碑里上线。",
   },
   bp: {

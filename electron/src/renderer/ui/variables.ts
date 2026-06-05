@@ -5,7 +5,7 @@
 import type { components } from "../../api/client";
 import { t } from "../i18n";
 import { h } from "./dom";
-import { getState } from "./state";
+import { selectedFull } from "./state";
 
 type Analysis = components["schemas"]["Analysis"];
 
@@ -16,8 +16,7 @@ interface Row {
 }
 
 export function renderVariables(): HTMLElement {
-  const state = getState();
-  const entry = state.entries.find((e) => e.id === state.selectedId);
+  const entry = selectedFull();
   if (!entry) {
     return h("div.detail-empty", null, t("bottom.varsEmpty"));
   }

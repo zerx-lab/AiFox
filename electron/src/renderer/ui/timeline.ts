@@ -15,10 +15,12 @@ import { highlight } from "./highlight";
 import { renderReplayPopover } from "./replay";
 import {
   type CenterView,
+  type EntryMeta,
   getState,
   selectMessage,
   selectToolUse,
   setCenterView,
+  selectedFull,
   setState,
   toggleMessageExpanded,
   type TrafficEntry,
@@ -34,7 +36,9 @@ type AnthropicUsage = components["schemas"]["AnthropicUsage"];
 
 export function renderTimeline(): HTMLElement {
   const state = getState();
-  const entry = state.entries.find((e) => e.id === state.selectedId) ?? null;
+  // selectedFull() returns the loaded full TrafficEntry for the current
+  // selection; null means nothing selected or still loading.
+  const entry = selectedFull();
 
   if (!entry) {
     return h(
@@ -156,6 +160,7 @@ function renderEntryBar(entry: TrafficEntry): HTMLElement | null {
 
   const chips: HTMLElement[] = [];
   ids.forEach((id, i) => {
+    // state.entries holds EntryMeta — these are peer turns, not the full entry
     const target = state.entries.find((e) => e.id === id);
     if (!target) return;
     chips.push(entryChip(target, i + 1, id === entry.id));
@@ -164,15 +169,14 @@ function renderEntryBar(entry: TrafficEntry): HTMLElement | null {
   return h("div.tl-entry-bar", null, ...chips);
 }
 
-function entryChip(target: TrafficEntry, ordinal: number, active: boolean): HTMLElement {
-  const analysis = target.analysis as Analysis | undefined;
-  const usage = analysis?.anthropic?.response?.usage;
-  const totalTok = usage
-    ? (usage.inputTokens ?? 0) +
-      (usage.outputTokens ?? 0) +
-      (usage.cacheReadInputTokens ?? 0) +
-      (usage.cacheCreationInputTokens ?? 0)
-    : 0;
+// entryChip uses EntryMeta because it operates on list entries (session
+// siblings), not the selected full entry.
+function entryChip(target: EntryMeta, ordinal: number, active: boolean): HTMLElement {
+  const totalTok =
+    (target.inputTokens ?? 0) +
+    (target.outputTokens ?? 0) +
+    (target.cacheRead ?? 0) +
+    (target.cacheCreate ?? 0);
   const kind = statusKind(target);
   const classes = [
     "tl-entry-chip",

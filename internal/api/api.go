@@ -108,17 +108,25 @@ func Register(api huma.API, deps Deps) {
 		OperationID: "list-traffic",
 		Method:      http.MethodGet,
 		Path:        "/v1/traffic",
-		Summary:     "List captured proxy traffic (newest first)",
+		Summary:     "List captured proxy traffic metadata (newest first)",
 		Tags:        []string{"traffic"},
-	}, listTrafficHandler(deps.Traffic))
+	}, listTrafficHandler(deps.Traffic, deps.Sessions))
 
 	huma.Register(api, huma.Operation{
 		OperationID: "get-traffic",
 		Method:      http.MethodGet,
 		Path:        "/v1/traffic/{id}",
-		Summary:     "Fetch a single captured entry by id",
+		Summary:     "Fetch a single captured entry by id (full bodies + analysis)",
 		Tags:        []string{"traffic"},
 	}, getTrafficHandler(deps.Traffic))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "tail-traffic",
+		Method:      http.MethodGet,
+		Path:        "/v1/traffic/{id}/tail",
+		Summary:     "Poll appended response bytes for a streaming entry",
+		Tags:        []string{"traffic"},
+	}, tailTrafficHandler(deps.Traffic))
 
 	huma.Register(api, huma.Operation{
 		OperationID: "clear-traffic",
@@ -344,6 +352,97 @@ type TrafficEntry struct {
 	Analysis        *llmparse.Analysis `json:"analysis,omitempty"`
 }
 
+// EntryMeta is the lightweight projection of a captured entry used by the
+// traffic LIST endpoint and the index SSE stream. It deliberately omits the
+// request/response bodies and the full analysis tree: those are large and
+// growing during a stream, and re-sending them per chunk to every renderer is
+// the O(n^2) amplifier the refactor removes (design §1.2). The renderer pulls
+// full bodies on demand via GET /v1/traffic/{id} and live-updates the one
+// selected streaming entry via GET /v1/traffic/{id}/tail. The few summary
+// fields the sidebar/list need (model, endpoint, token tallies, structured
+// flag) are derived here so the renderer never has to parse a body to render
+// the list.
+type EntryMeta struct {
+	ID             string    `json:"id"`
+	StartedAt      time.Time `json:"startedAt"`
+	EndedAt        time.Time `json:"endedAt"`
+	DurationMillis int64     `json:"durationMillis"`
+	Method         string    `json:"method"`
+	URL            string    `json:"url"`
+	UpstreamURL    string    `json:"upstreamUrl"`
+	StatusCode     int       `json:"statusCode"`
+	RequestSize    int64     `json:"requestSize"`
+	ResponseSize   int64     `json:"responseSize"`
+	Streaming      bool      `json:"streaming"`
+	Truncated      bool      `json:"truncated"`
+	Error          string    `json:"error,omitempty"`
+	SessionID      string    `json:"sessionId,omitempty"`
+	ReplayedFromID string    `json:"replayedFromId,omitempty"`
+	// Derived summary fields (so the list never parses a body):
+	Model         string `json:"model,omitempty" doc:"Model from the request/response analysis."`
+	Endpoint      string `json:"endpoint,omitempty" doc:"Human-readable endpoint label for grouping."`
+	HasStructured bool   `json:"hasStructured" doc:"True when a structured Anthropic analysis is available."`
+	IsUtility     bool   `json:"isUtility" doc:"Sub-task call (title-gen/tool summary); excluded from turn counts."`
+	// HasResponseError flags an upstream/API error carried in the response body
+	// (e.g. an Anthropic error envelope on a streamed HTTP 200). Entry.Error
+	// covers only transport/proxy failures, so the list/Problems view needs this
+	// to surface body-level errors without fetching the full entry.
+	HasResponseError bool `json:"hasResponseError"`
+	// WarningCount is the number of soft parser warnings on the analysis, so the
+	// Problems view can flag entries worth inspecting without the full body.
+	WarningCount int `json:"warningCount"`
+	InputTokens  int `json:"inputTokens"`
+	OutputTokens int `json:"outputTokens"`
+	CacheRead    int `json:"cacheRead"`
+	CacheCreate  int `json:"cacheCreate"`
+}
+
+func toMeta(e *store.Entry) EntryMeta {
+	m := EntryMeta{
+		ID:             e.ID,
+		StartedAt:      e.StartedAt,
+		EndedAt:        e.EndedAt,
+		DurationMillis: e.DurationMillis,
+		Method:         e.Method,
+		URL:            e.URL,
+		UpstreamURL:    e.UpstreamURL,
+		StatusCode:     e.StatusCode,
+		RequestSize:    e.RequestSize,
+		ResponseSize:   e.ResponseSize,
+		Streaming:      e.Streaming,
+		Truncated:      e.Truncated,
+		Error:          e.Error,
+		SessionID:      e.SessionID,
+		ReplayedFromID: e.ReplayedFromID,
+	}
+	if a, ok := e.Analysis.(*llmparse.Analysis); ok && a != nil {
+		m.Endpoint = a.Endpoint
+		m.WarningCount = len(a.Warnings)
+		m.IsUtility = llmparse.IsUtilityRequest(a)
+		if a.Anthropic != nil {
+			m.HasStructured = true
+			if a.Anthropic.Request != nil {
+				m.Model = a.Anthropic.Request.Model
+			}
+			if r := a.Anthropic.Response; r != nil {
+				if r.Model != "" {
+					m.Model = r.Model
+				}
+				if r.Error != nil {
+					m.HasResponseError = true
+				}
+				if u := r.Usage; u != nil {
+					m.InputTokens = u.InputTokens
+					m.OutputTokens = u.OutputTokens
+					m.CacheRead = u.CacheReadInputTokens
+					m.CacheCreate = u.CacheCreationInputTokens
+				}
+			}
+		}
+	}
+	return m
+}
+
 func toWire(e *store.Entry) TrafficEntry {
 	out := TrafficEntry{
 		ID:              e.ID,
@@ -374,18 +473,70 @@ func toWire(e *store.Entry) TrafficEntry {
 
 type ListTrafficOutput struct {
 	Body struct {
-		Items []TrafficEntry `json:"items"`
+		Items []EntryMeta `json:"items"`
 	}
 }
 
-func listTrafficHandler(st *store.Store) func(context.Context, *struct{}) (*ListTrafficOutput, error) {
+// listTrafficHandler returns lightweight EntryMeta, not full TrafficEntry: the
+// list/sidebar never needs bodies, and projecting here keeps the index path
+// O(entries) in metadata instead of O(total body bytes). Full bodies are
+// fetched per entry via GET /v1/traffic/{id}.
+func listTrafficHandler(st *store.Store, agg *session.Aggregator) func(context.Context, *struct{}) (*ListTrafficOutput, error) {
 	return func(_ context.Context, _ *struct{}) (*ListTrafficOutput, error) {
 		entries := st.List()
 		out := &ListTrafficOutput{}
-		out.Body.Items = make([]TrafficEntry, 0, len(entries))
+		out.Body.Items = make([]EntryMeta, 0, len(entries))
 		for _, e := range entries {
-			out.Body.Items = append(out.Body.Items, toWire(e))
+			m := toMeta(e)
+			if agg != nil && m.SessionID == "" {
+				m.SessionID = agg.SessionOf(e.ID)
+			}
+			out.Body.Items = append(out.Body.Items, m)
 		}
+		return out, nil
+	}
+}
+
+// TrafficTailInput requests the bytes appended to a streaming entry's response
+// since a client-held offset. The renderer polls this (~10Hz) only while the
+// selected entry is still streaming, then stops once done=true. Offset
+// bookkeeping is entirely client-side, so the store needs no per-subscriber
+// state and there is no second long-lived connection.
+type TrafficTailInput struct {
+	ID    string `path:"id" maxLength:"64"`
+	Since int64  `query:"since" minimum:"0" doc:"Byte offset already seen by the client."`
+}
+
+type TrafficTailOutput struct {
+	Body struct {
+		AppendBytes  string `json:"appendBytes" doc:"Response bytes after the requested offset."`
+		ResponseSize int64  `json:"responseSize" doc:"Total response bytes captured so far."`
+		Truncated    bool   `json:"truncated"`
+		Done         bool   `json:"done" doc:"True once the entry has finalized; stop polling."`
+		StatusCode   int    `json:"statusCode"`
+	}
+}
+
+func tailTrafficHandler(st *store.Store) func(context.Context, *TrafficTailInput) (*TrafficTailOutput, error) {
+	return func(_ context.Context, in *TrafficTailInput) (*TrafficTailOutput, error) {
+		e, ok := st.Get(in.ID)
+		if !ok {
+			return nil, huma.Error404NotFound("no such traffic entry")
+		}
+		out := &TrafficTailOutput{}
+		body := e.ResponseBody
+		since := in.Since
+		if since < 0 {
+			since = 0
+		}
+		if since > int64(len(body)) {
+			since = int64(len(body))
+		}
+		out.Body.AppendBytes = body[since:]
+		out.Body.ResponseSize = int64(len(body))
+		out.Body.Truncated = e.Truncated
+		out.Body.Done = !e.EndedAt.IsZero()
+		out.Body.StatusCode = e.StatusCode
 		return out, nil
 	}
 }
@@ -454,10 +605,25 @@ func registerTrafficStream(api huma.API, st *store.Store, agg *session.Aggregato
 	})
 }
 
+// Index-stream coalescing/reconcile cadence. flushInterval bounds how often a
+// streaming entry's metadata is pushed (latest-wins), keeping the renderer to
+// ~12 list updates/sec/entry instead of one per 32 KiB chunk. reconcileInterval
+// backstops the store fan-out's drop-on-full: a finalize broadcast that was
+// dropped under load is recovered here so an entry never stays "streaming"
+// forever (the meta-only design removed the old polling fallback).
+const (
+	flushInterval     = 80 * time.Millisecond
+	reconcileInterval = 1 * time.Second
+)
+
 // writeTrafficStream pushes events as the store/aggregator emit updates.
-// The first event ("snapshot") replays the current buffer (and current
-// sessions, if a session aggregator is wired in) so the renderer can boot
-// without a separate fetch.
+//
+// The first event ("snapshot") replays the current buffer as EntryMeta (no
+// bodies) so the renderer boots without a separate fetch. Live "entry" events
+// are coalesced: non-terminal updates accumulate in a dirty set flushed every
+// flushInterval (latest-wins), while terminal (finalized) updates are sent
+// immediately and exactly once. A reconcile tick guarantees terminal delivery
+// even if the store dropped a finalize broadcast on a full channel.
 func writeTrafficStream(ctx huma.Context, st *store.Store, agg *session.Aggregator, bp BreakpointController) {
 	ctx.SetHeader("Content-Type", "text/event-stream")
 	ctx.SetHeader("Cache-Control", "no-cache")
@@ -479,16 +645,24 @@ func writeTrafficStream(ctx huma.Context, st *store.Store, agg *session.Aggregat
 		return true
 	}
 
-	// Initial snapshot — newest first to match the list endpoint.
-	snap := make([]TrafficEntry, 0)
-	for _, e := range st.List() {
-		// Attach session id at wire time so the renderer doesn't need a
-		// second lookup. The aggregator is the authoritative source.
-		entry := toWire(e)
-		if agg != nil && entry.SessionID == "" {
-			entry.SessionID = agg.SessionOf(entry.ID)
+	metaOf := func(e *store.Entry) EntryMeta {
+		m := toMeta(e)
+		if agg != nil && m.SessionID == "" {
+			m.SessionID = agg.SessionOf(e.ID)
 		}
-		snap = append(snap, entry)
+		return m
+	}
+
+	// Subscribe BEFORE snapshotting so an entry added in the gap between the two
+	// queues in the channel buffer instead of being lost until finalize. The
+	// renderer upserts by id, so the snapshot/subscribe overlap dedups for free.
+	ch, cancel := st.Subscribe()
+	defer cancel()
+
+	// Initial snapshot — newest first to match the list endpoint.
+	snap := make([]EntryMeta, 0)
+	for _, e := range st.List() {
+		snap = append(snap, metaOf(e))
 	}
 	if !send("snapshot", snap) {
 		return
@@ -503,9 +677,6 @@ func writeTrafficStream(ctx huma.Context, st *store.Store, agg *session.Aggregat
 			return
 		}
 	}
-
-	ch, cancel := st.Subscribe()
-	defer cancel()
 
 	var sessCh <-chan struct{}
 	var sessCancel func()
@@ -528,9 +699,20 @@ func writeTrafficStream(ctx huma.Context, st *store.Store, agg *session.Aggregat
 		}
 	}
 
+	// Coalescing state. dirty holds the latest snapshot of each in-flight
+	// entry; sentTerminal records which entries we've already delivered as
+	// finalized so the reconcile pass never double-sends.
+	dirty := make(map[string]*store.Entry)
+	sentTerminal := make(map[string]struct{})
+	sendEntry := func(e *store.Entry) bool { return send("entry", metaOf(e)) }
+
 	clientGone := ctx.Context().Done()
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
+	flush := time.NewTicker(flushInterval)
+	defer flush.Stop()
+	reconcile := time.NewTicker(reconcileInterval)
+	defer reconcile.Stop()
 
 	for {
 		select {
@@ -538,12 +720,48 @@ func writeTrafficStream(ctx huma.Context, st *store.Store, agg *session.Aggregat
 			if !ok {
 				return
 			}
-			entry := toWire(e)
-			if agg != nil && entry.SessionID == "" {
-				entry.SessionID = agg.SessionOf(entry.ID)
+			if e.EndedAt.IsZero() {
+				dirty[e.ID] = e // coalesce live updates; latest wins
+				continue
 			}
-			if !send("entry", entry) {
+			// Terminal: deliver immediately and exactly once.
+			delete(dirty, e.ID)
+			if _, done := sentTerminal[e.ID]; done {
+				continue
+			}
+			if !sendEntry(e) {
 				return
+			}
+			sentTerminal[e.ID] = struct{}{}
+		case <-flush.C:
+			for id, e := range dirty {
+				if !sendEntry(e) {
+					return
+				}
+				delete(dirty, id)
+			}
+		case <-reconcile.C:
+			// Backstop dropped finalize broadcasts and prune sentTerminal of
+			// entries that have been evicted from the ring buffer.
+			present := make(map[string]struct{})
+			for _, e := range st.List() {
+				present[e.ID] = struct{}{}
+				if e.EndedAt.IsZero() {
+					continue
+				}
+				if _, done := sentTerminal[e.ID]; done {
+					continue
+				}
+				delete(dirty, e.ID)
+				if !sendEntry(e) {
+					return
+				}
+				sentTerminal[e.ID] = struct{}{}
+			}
+			for id := range sentTerminal {
+				if _, ok := present[id]; !ok {
+					delete(sentTerminal, id)
+				}
 			}
 		case _, ok := <-sessCh:
 			if !ok {

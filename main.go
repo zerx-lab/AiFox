@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 
 	"github.com/zerx-lab/ai-fox/internal/config"
+	"github.com/zerx-lab/ai-fox/internal/llmparse"
 	"github.com/zerx-lab/ai-fox/internal/proxy"
 	"github.com/zerx-lab/ai-fox/internal/server"
 	"github.com/zerx-lab/ai-fox/internal/session"
@@ -61,6 +62,16 @@ func runServer() error {
 	if err != nil {
 		return fmt.Errorf("traffic store: %w", err)
 	}
+	// Entries restored from disk decode their Analysis as map[string]any; re-type
+	// them to *llmparse.Analysis so the API projections and session aggregator
+	// see the structured view (otherwise restored traffic shows no model/tokens
+	// and never re-aggregates into sessions). Runs before the aggregator starts.
+	traffic.MapAnalysis(func(a any) any {
+		if r := llmparse.ReifyAnalysis(a); r != nil {
+			return r
+		}
+		return a
+	})
 
 	ctrl, err := proxy.NewController(settings.Get().ProxyPort, settings, traffic)
 	if err != nil {

@@ -252,21 +252,24 @@ func lowerKeys(h map[string]string) map[string]string {
 	return out
 }
 
-// analyzeInterval throttles in-stream re-parses. Analyze is O(n) over the
-// captured response body, so re-running it on every 32 KiB chunk would be
-// quadratic for long transcripts. ~150 ms is fast enough that the UI looks
-// "live" (≈7 Hz, smoother than human reading speed) while keeping CPU
-// linear. The first chunk always triggers an analyze so the conversation
-// view appears immediately instead of after one interval of latency.
-const analyzeInterval = 150 * time.Millisecond
+// firstAnalyzeBytes is the captured-size threshold at which the SECOND in-stream
+// analysis fires (the first fires on the first chunk). After that the threshold
+// doubles each time — see captureAndStream.
+const firstAnalyzeBytes = 64 * 1024
 
 // captureAndStream copies upstream into the client while appending to the
 // store entry's ResponseBody. Each ~32 KiB chunk triggers a flush + store
-// update so the UI sees streaming progress. To make the conversation view
-// fill in live (not just the raw body), we also run llmparse.Analyze on a
-// throttled schedule and write the partial Analysis into the same update —
-// piggybacking on the existing SSE broadcast keeps it to one event per
-// chunk.
+// update so the UI sees streaming progress (raw bytes; the meta-only index
+// stream + per-entry tail keep the renderer live).
+//
+// Analyze is O(captured-size), so re-running it on a fixed time interval makes
+// total in-stream parse work O(size × duration) — quadratic for long streams
+// and a real CPU amplifier under concurrency. Instead we re-analyze on
+// GEOMETRIC size thresholds (first chunk, then every time the captured body
+// doubles): ~log2(size) analyses whose sizes form a geometric series, so total
+// work is bounded to O(size) regardless of stream duration, while still filling
+// the structured view progressively. The full, authoritative analysis always
+// runs once more at finalize (see ServeHTTP).
 //
 // ctx is the inbound request's context. When it is cancelled (the client
 // hung up — e.g. the user pressed Esc in opencode, or the chat window was
@@ -281,7 +284,10 @@ func captureAndStream(ctx context.Context, w http.ResponseWriter, body io.Reader
 	var captured bytes.Buffer
 	totalBytes := int64(0)
 	truncated := false
-	var lastAnalyzeAt time.Time // zero ⇒ "never", so the first chunk fires immediately
+	// Next captured-size threshold that triggers an analysis. 0 ⇒ the first
+	// chunk always fires; thereafter it doubles, bounding total analysis work to
+	// O(final size).
+	var nextAnalyzeLen int
 
 	for {
 		n, err := body.Read(buf)
@@ -310,10 +316,14 @@ func captureAndStream(ctx context.Context, w http.ResponseWriter, body io.Reader
 			default:
 				captured.Write(buf[:n])
 			}
-			now := time.Now()
-			shouldAnalyze := lastAnalyzeAt.IsZero() || now.Sub(lastAnalyzeAt) >= analyzeInterval
+			shouldAnalyze := captured.Len() >= nextAnalyzeLen
 			if shouldAnalyze {
-				lastAnalyzeAt = now
+				// Schedule the next analysis at double the current size (with a
+				// floor so the first few KiB don't fire on every chunk).
+				nextAnalyzeLen = captured.Len() * 2
+				if nextAnalyzeLen < firstAnalyzeBytes {
+					nextAnalyzeLen = firstAnalyzeBytes
+				}
 			}
 			// Periodic snapshot so the UI sees live progress. We batch the
 			// optional Analyze into the same Update so each chunk produces at

@@ -17,11 +17,65 @@
 //     fragment with a hint that this field is new.
 package llmparse
 
+import "encoding/json"
+
 // Kind discriminates which analyzer produced an Analysis. New analyzers add
 // a new Kind constant and a new pointer field on Analysis.
 const (
 	KindAnthropicMessages = "anthropic.messages"
 )
+
+// ReifyAnalysis coerces a value back into a *Analysis. Live entries already
+// hold a *Analysis; entries restored from the JSONL persistence file hold a
+// map[string]any (json.Unmarshal into an `any` field), which fails the
+// `e.Analysis.(*Analysis)` type assertion every consumer relies on — so
+// restored entries would otherwise show no model/tokens and never aggregate
+// into sessions after a restart. Re-marshaling the map and decoding it into the
+// concrete type faithfully reconstructs the structured view (same JSON shape,
+// same field tags). Returns nil for anything it can't reify.
+//
+// This lives in llmparse (not store) so the store stays decoupled from the
+// parser; the caller (main) wires it via store.MapAnalysis on boot.
+func ReifyAnalysis(v any) *Analysis {
+	switch a := v.(type) {
+	case nil:
+		return nil
+	case *Analysis:
+		return a
+	case Analysis:
+		return &a
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out Analysis
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return &out
+}
+
+// IsUtilityRequest classifies a parsed request as a non-conversational sub-task
+// (e.g. a title generator or tool-output summarizer) rather than a main agent
+// turn. These calls belong to a session but should not count as conversation
+// turns nor steal tail-follow focus.
+//
+// Heuristic (tuned for opencode, the only client targeted so far): the request
+// defines no tools AND carries a single message. Main agent turns ship the tool
+// catalog on every call; the sub-task calls opencode fires (title generation,
+// summaries) are single-shot and tool-less. A tool-less agent's real turns
+// would be misclassified, so this stays a heuristic, not a guarantee.
+func IsUtilityRequest(a *Analysis) bool {
+	if a == nil || a.Anthropic == nil || a.Anthropic.Request == nil {
+		return false
+	}
+	r := a.Anthropic.Request
+	if len(r.Tools) > 0 {
+		return false
+	}
+	return len(r.Messages) <= 1
+}
 
 // Analysis is the top-level structured view of one captured request/response
 // pair. Exactly one of the *Analysis fields is non-nil; Kind names which one.

@@ -1,22 +1,21 @@
 // Grouping & filtering helpers shared by sidebar / statusbar / filter pill.
 // Single source of truth so a future "session" grouping (Milestone E) only
 // needs to swap groupKey() without rewriting the callers.
+//
+// These helpers operate on EntryMeta (the lightweight list projection).
+// Deep per-entry analysis fields (bodies, tool calls, etc.) are only
+// available on the selected full entry via selectedFull() in detail panes.
 
-import type { components } from "../../api/client";
-import type { TrafficEntry, TrafficFilter } from "./state";
+import type { EntryMeta, TrafficFilter } from "./state";
 
-type Analysis = components["schemas"]["Analysis"];
-type AnthropicUsage = components["schemas"]["AnthropicUsage"];
-
-export function groupKey(entry: TrafficEntry): string {
-  const a = entry.analysis as Analysis | undefined;
-  return a?.endpoint || `${entry.method} ${entry.url || "/"}`;
+export function groupKey(entry: EntryMeta): string {
+  return entry.endpoint || `${entry.method} ${entry.url || "/"}`;
 }
 
 export function applyFilter(
-  entries: TrafficEntry[],
+  entries: EntryMeta[],
   filter: TrafficFilter,
-): TrafficEntry[] {
+): EntryMeta[] {
   const text = filter.text.trim().toLowerCase();
   return entries.filter((e) => {
     if (text) {
@@ -29,10 +28,7 @@ export function applyFilter(
       if (!isErr) return false;
     }
     if (filter.model) {
-      const m =
-        (e.analysis as Analysis | undefined)?.anthropic?.request?.model ||
-        (e.analysis as Analysis | undefined)?.anthropic?.response?.model ||
-        "";
+      const m = e.model || "";
       if (!m.includes(filter.model)) return false;
     }
     return true;
@@ -47,7 +43,7 @@ export interface AggregateTotals {
   cacheCreate: number;
 }
 
-export function aggregateUsage(entries: TrafficEntry[]): AggregateTotals {
+export function aggregateUsage(entries: EntryMeta[]): AggregateTotals {
   const out: AggregateTotals = {
     entries: entries.length,
     input: 0,
@@ -56,24 +52,19 @@ export function aggregateUsage(entries: TrafficEntry[]): AggregateTotals {
     cacheCreate: 0,
   };
   for (const e of entries) {
-    const u = (e.analysis as Analysis | undefined)?.anthropic?.response?.usage as
-      | AnthropicUsage
-      | undefined;
-    if (!u) continue;
-    out.input += u.inputTokens ?? 0;
-    out.output += u.outputTokens ?? 0;
-    out.cacheRead += u.cacheReadInputTokens ?? 0;
-    out.cacheCreate += u.cacheCreationInputTokens ?? 0;
+    out.input += e.inputTokens ?? 0;
+    out.output += e.outputTokens ?? 0;
+    out.cacheRead += e.cacheRead ?? 0;
+    out.cacheCreate += e.cacheCreate ?? 0;
   }
   return out;
 }
 
 /** Collect distinct model labels across entries (sorted). */
-export function distinctModels(entries: TrafficEntry[]): string[] {
+export function distinctModels(entries: EntryMeta[]): string[] {
   const seen = new Set<string>();
   for (const e of entries) {
-    const a = e.analysis as Analysis | undefined;
-    const m = a?.anthropic?.request?.model || a?.anthropic?.response?.model;
+    const m = e.model;
     if (m) seen.add(m);
   }
   return Array.from(seen).sort();

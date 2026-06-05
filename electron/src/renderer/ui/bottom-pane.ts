@@ -124,7 +124,8 @@ function problemCount(): number {
   // first-pass criteria used by problems.ts.
   let n = 0;
   for (const e of getState().entries) {
-    if (e.error || e.statusCode >= 400) n += 1;
+    if (e.error || e.statusCode >= 400 || e.hasResponseError) n += 1;
+    if (e.warningCount > 0) n += 1;
   }
   return n;
 }

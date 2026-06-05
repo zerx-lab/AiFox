@@ -25,7 +25,8 @@ type SessionSummaryBody struct {
 	Name          string    `json:"name,omitempty" doc:"User-supplied label. Empty when the user has not renamed this session."`
 	Fingerprint   string    `json:"fingerprint" doc:"Hash of the conversation anchor."`
 	Provider      string    `json:"provider" doc:"anthropic | openai | gemini"`
-	Model         string    `json:"model,omitempty"`
+	Model         string    `json:"model,omitempty" doc:"Primary (most recent non-utility) model."`
+	Models        []string  `json:"models,omitempty" doc:"Every distinct model used, primary first."`
 	EntryIDs      []string  `json:"entryIds" doc:"Captured traffic entries belonging to this session, oldest first."`
 	StartedAt     time.Time `json:"startedAt"`
 	LastAt        time.Time `json:"lastAt"`
@@ -47,6 +48,7 @@ func toSessionBody(s *session.Summary) SessionSummaryBody {
 		Fingerprint:   s.Fingerprint,
 		Provider:      s.Provider,
 		Model:         s.Model,
+		Models:        s.Models,
 		EntryIDs:      s.EntryIDs,
 		StartedAt:     s.StartedAt,
 		LastAt:        s.LastAt,

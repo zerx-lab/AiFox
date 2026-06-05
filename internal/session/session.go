@@ -19,9 +19,13 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zerx-lab/ai-fox/internal/llmparse"
@@ -33,10 +37,14 @@ type Summary struct {
 	ID string `json:"id"`
 	// Name is a user-supplied label. Empty means "no custom name set";
 	// the renderer falls back to a time-based label in that case.
-	Name          string    `json:"name,omitempty"`
-	Fingerprint   string    `json:"fingerprint"`
-	Provider      string    `json:"provider"`
+	Name        string `json:"name,omitempty"`
+	Fingerprint string `json:"fingerprint"`
+	Provider    string `json:"provider"`
+	// Model is the session's primary model — the most recent non-utility model
+	// seen. Models lists every distinct model used (primary first), so a mixed
+	// opus+haiku session can be shown as "opus·haiku" without losing the anchor.
 	Model         string    `json:"model,omitempty"`
+	Models        []string  `json:"models,omitempty"`
 	EntryIDs      []string  `json:"entryIds"`
 	StartedAt     time.Time `json:"startedAt"`
 	LastAt        time.Time `json:"lastAt"`
@@ -51,19 +59,33 @@ type Summary struct {
 	HasUnfinished bool      `json:"hasUnfinished"`
 }
 
+// Coalescing/reconcile cadence. Per-chunk recompute + notify was the second
+// concurrency amplifier (design §1.2 B): consume ran an O(turns) re-sum and a
+// goroutine-spawning notify on every streamed chunk. Now consume only buckets
+// + marks the session dirty; a flush tick recomputes dirty sessions and fires
+// one coalesced notify. reconcile recovers entries whose bucketing broadcast
+// was dropped on a full subscribe channel (the cause of the harness's 6/8
+// under-aggregation).
+const (
+	flushInterval     = 80 * time.Millisecond
+	reconcileInterval = 1 * time.Second
+)
+
 // Aggregator builds and maintains sessions from a store fan-out.
 type Aggregator struct {
 	st *store.Store
 
 	mu       sync.RWMutex
 	sessions map[string]*Summary                     // sessionID -> rollup
-	bucket   map[string][]*Summary                   // fingerprint -> ordered session list
+	byKey    map[string]*Summary                     // client session key (header/replay) -> session
+	bucket   map[string][]*Summary                   // fingerprint -> ordered session list (fallback only)
 	last     map[string][]llmparse.NormalizedMessage // sessionID -> last seen messages, for prefix containment
 	byEntry  map[string]string                       // entryID -> sessionID
-	// names persists user-supplied labels keyed by fingerprint so they
-	// survive an app restart: the aggregator forgets sessions on shutdown,
-	// but next time the same conversation anchor shows up we re-apply the
-	// label.
+	dirty    map[string]struct{}                     // sessionIDs needing a recompute on the next flush tick
+	// names persists user-supplied labels keyed by session ANCHOR (a header key
+	// for keyed sessions, a fingerprint for fallback ones) so they survive an
+	// app restart: the aggregator forgets sessions on shutdown, but next time
+	// the same conversation anchor shows up we re-apply the label.
 	names     map[string]string
 	namesPath string
 
@@ -79,9 +101,11 @@ func New(st *store.Store, namesPath string) *Aggregator {
 	a := &Aggregator{
 		st:        st,
 		sessions:  make(map[string]*Summary),
+		byKey:     make(map[string]*Summary),
 		bucket:    make(map[string][]*Summary),
 		last:      make(map[string][]llmparse.NormalizedMessage),
 		byEntry:   make(map[string]string),
+		dirty:     make(map[string]struct{}),
 		names:     make(map[string]string),
 		namesPath: namesPath,
 		subs:      make(map[int]chan struct{}),
@@ -90,8 +114,8 @@ func New(st *store.Store, namesPath string) *Aggregator {
 	return a
 }
 
-// Start launches the goroutine that drains the store fan-out and updates
-// the aggregator. Cancel by closing the returned stop channel.
+// Start launches the goroutines that drain the store fan-out and periodically
+// flush coalesced session updates. Cancel via the returned stop func.
 func (a *Aggregator) Start() (stop func()) {
 	// Bootstrap with whatever is already in the buffer. store.List returns
 	// newest first; consume oldest first so prefix detection sees them in
@@ -100,8 +124,13 @@ func (a *Aggregator) Start() (stop func()) {
 	for i := len(existing) - 1; i >= 0; i-- {
 		a.consume(existing[i])
 	}
+	a.flushDirty() // settle bootstrapped sessions before the first subscriber.
 
-	ch, cancel := a.st.Subscribe()
+	// The aggregator is a correctness-critical consumer: a dropped bucketing
+	// event leaves an entry unsessioned until the next reconcile. Take a large
+	// buffer so realistic concurrent-stream bursts don't overflow; reconcile
+	// remains the backstop for sustained overload.
+	ch, cancel := a.st.SubscribeBuffer(1024)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -109,10 +138,108 @@ func (a *Aggregator) Start() (stop func()) {
 			a.consume(e)
 		}
 	}()
+
+	tickStop := make(chan struct{})
+	tickDone := make(chan struct{})
+	go a.tickLoop(tickStop, tickDone)
+
 	return func() {
 		cancel()
 		<-stopped
+		close(tickStop)
+		<-tickDone
 	}
+}
+
+// tickLoop coalesces session recomputes (flushInterval) and recovers entries
+// whose bucketing broadcast was dropped under load (reconcileInterval).
+func (a *Aggregator) tickLoop(stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	flush := time.NewTicker(flushInterval)
+	defer flush.Stop()
+	reconcile := time.NewTicker(reconcileInterval)
+	defer reconcile.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-flush.C:
+			a.flushDirty()
+		case <-reconcile.C:
+			a.reconcile()
+			a.flushDirty()
+		}
+	}
+}
+
+// flushDirty recomputes every session marked dirty since the last tick and
+// fires a single coalesced notify. Recompute is gated here (not per chunk) so
+// the O(turns) re-sum runs at most ~12 Hz per session under load.
+//
+// The per-entry store reads happen OUTSIDE a.mu: we snapshot each dirty
+// session's entry-id list under the lock, drop the lock, scan the store (which
+// has its own lock — order a.mu -> store, never inverted), then re-acquire a.mu
+// only to write the rollups back. Holding a.mu across the st.Get loop would
+// stall the SSE hot path (agg.SessionOf is on it) and back up the drain
+// goroutine, which makes the dropped-broadcast window the reconcile heals below
+// more likely.
+func (a *Aggregator) flushDirty() {
+	a.mu.Lock()
+	if len(a.dirty) == 0 {
+		a.mu.Unlock()
+		return
+	}
+	work := make(map[string][]string, len(a.dirty))
+	for sid := range a.dirty {
+		if s := a.sessions[sid]; s != nil {
+			work[sid] = append([]string(nil), s.EntryIDs...)
+		}
+		delete(a.dirty, sid)
+	}
+	a.mu.Unlock()
+
+	rollups := make(map[string]rollup, len(work))
+	for sid, ids := range work {
+		rollups[sid] = a.computeRollup(ids)
+	}
+
+	a.mu.Lock()
+	for sid, r := range rollups {
+		if s := a.sessions[sid]; s != nil {
+			r.applyTo(s)
+		}
+	}
+	a.mu.Unlock()
+	a.notify()
+}
+
+// reconcile self-heals two ways the store fan-out's drop-on-full can corrupt
+// the session view under sustained K-stream overload:
+//
+//  1. A new entry whose bucketing broadcast was dropped is never bucketed —
+//     we re-consume any store entry not yet in byEntry.
+//  2. An already-bucketed entry whose *finalize* broadcast was dropped leaves
+//     its session marked HasUnfinished/active forever (consume never re-marks
+//     it dirty, and the unbucketed pass above skips it as `known`). We re-mark
+//     every still-unfinished session dirty so the next flush recomputes it from
+//     store truth (where EndedAt is now set) and flips it to completed.
+func (a *Aggregator) reconcile() {
+	for _, e := range a.st.List() {
+		a.mu.RLock()
+		_, known := a.byEntry[e.ID]
+		a.mu.RUnlock()
+		if known {
+			continue
+		}
+		a.consume(e)
+	}
+	a.mu.Lock()
+	for sid, s := range a.sessions {
+		if s.HasUnfinished {
+			a.dirty[sid] = struct{}{}
+		}
+	}
+	a.mu.Unlock()
 }
 
 // Subscribe returns a channel that gets pinged after each session update.
@@ -158,15 +285,28 @@ func (a *Aggregator) List() []*Summary {
 		clone.EntryIDs = append([]string(nil), s.EntryIDs...)
 		out = append(out, &clone)
 	}
-	// Newest LastAt first.
+	// Newest StartedAt first. Sorting by StartedAt (immutable) instead of LastAt
+	// keeps the sidebar order STABLE: an active session updating at ~12 Hz no
+	// longer reshuffles to the top on every tick (the jitter the UX layer must
+	// avoid). Liveness is conveyed by the per-session status dot, not by
+	// reordering. Tie-break by ID so equal StartedAt is deterministic.
 	for i := 1; i < len(out); i++ {
 		j := i
-		for j > 0 && out[j-1].LastAt.Before(out[j].LastAt) {
+		for j > 0 && lessRecent(out[j-1], out[j]) {
 			out[j-1], out[j] = out[j], out[j-1]
 			j--
 		}
 	}
 	return out
+}
+
+// lessRecent reports whether a should sort AFTER b (b is newer). Newest
+// StartedAt first; ID descending as a stable tie-break.
+func lessRecent(a, b *Summary) bool {
+	if !a.StartedAt.Equal(b.StartedAt) {
+		return a.StartedAt.Before(b.StartedAt)
+	}
+	return a.ID < b.ID
 }
 
 // Get returns the session for a single ID.
@@ -186,9 +326,13 @@ func (a *Aggregator) Get(id string) (*Summary, bool) {
 var ErrNotFound = errors.New("session: not found")
 
 // SetName stores a user-supplied label for the session with the given id.
-// The name is also persisted by fingerprint so it survives a restart. An
-// empty name clears the label (and removes the fingerprint entry from the
-// names file).
+// The name is persisted by the session's ANCHOR (its Fingerprint field — a
+// header key like "hdr:X-Session-Affinity:…" for keyed sessions, or a request
+// fingerprint hash for fallback sessions) so it re-applies when the same
+// conversation re-aggregates after a restart. An empty name clears the label.
+// Note: custom names saved before the L3 header-keying upgrade were keyed by a
+// pure fingerprint and are orphaned for conversations now keyed by header — an
+// accepted one-time loss (this is a pre-release debug tool).
 func (a *Aggregator) SetName(id, name string) error {
 	a.mu.Lock()
 	s, ok := a.sessions[id]
@@ -197,11 +341,11 @@ func (a *Aggregator) SetName(id, name string) error {
 		return ErrNotFound
 	}
 	s.Name = name
-	fp := s.Fingerprint
+	anchor := s.Fingerprint
 	if name == "" {
-		delete(a.names, fp)
+		delete(a.names, anchor)
 	} else {
-		a.names[fp] = name
+		a.names[anchor] = name
 	}
 	snapshot := make(map[string]string, len(a.names))
 	for k, v := range a.names {
@@ -222,9 +366,11 @@ func (a *Aggregator) SetName(id, name string) error {
 func (a *Aggregator) Clear() error {
 	a.mu.Lock()
 	a.sessions = make(map[string]*Summary)
+	a.byKey = make(map[string]*Summary)
 	a.bucket = make(map[string][]*Summary)
 	a.last = make(map[string][]llmparse.NormalizedMessage)
 	a.byEntry = make(map[string]string)
+	a.dirty = make(map[string]struct{})
 	a.names = make(map[string]string)
 	path := a.namesPath
 	a.mu.Unlock()
@@ -247,125 +393,271 @@ func (a *Aggregator) SessionOf(entryID string) string {
 	return a.byEntry[entryID]
 }
 
-// consume folds a single entry update into the session map.
+// consume folds a single entry update into the session map. It only buckets
+// the entry and marks its session dirty; the actual rollup recompute + notify
+// is deferred to the coalescing flush tick (flushDirty). This keeps the
+// streamed hot path O(1) per chunk instead of O(turns) + a goroutine.
+//
+// Correlation precedence (design §3):
+//  1. An explicit client session key — the X-Session-Affinity header (opencode)
+//     or a replay's ReplayedFromID. This is derived from headers BEFORE
+//     requiring a parsed analysis, so a session forms on the very first frame
+//     and survives mixed models / mixed system prompts within one conversation.
+//  2. Otherwise the request-fingerprint + message-prefix fallback (keeps Model;
+//     forks on divergence). Used for clients that send no session header.
 func (a *Aggregator) consume(e *store.Entry) {
 	if e == nil {
 		return
 	}
+	key, keyed := sessionKeyOf(e)
 	analysis, _ := e.Analysis.(*llmparse.Analysis)
 	norm := normalizedOf(analysis)
-	if norm == nil {
+	// Without an explicit key we need the analysis (for the fingerprint anchor);
+	// with a key we can place the entry even before its body parses.
+	if !keyed && norm == nil {
 		return
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// If the entry has already been bucketed (typical for re-broadcasts on
-	// in-stream chunk updates) just refresh the per-session rollup.
+	// Already bucketed (typical for in-stream chunk re-broadcasts): refresh the
+	// prefix anchor (the message list grows as the turn streams) and mark dirty.
 	if sid, ok := a.byEntry[e.ID]; ok {
-		a.refreshSummary(sid, e, norm)
-		go a.notify()
+		if norm != nil {
+			a.last[sid] = norm.Messages
+		}
+		a.dirty[sid] = struct{}{}
 		return
 	}
 
-	fp := norm.Fingerprint()
 	var match *Summary
-	for _, s := range a.bucket[fp] {
-		prev := a.last[s.ID]
-		if isPrefix(prev, norm.Messages) {
-			match = s
-			break
+	if keyed {
+		// Explicit client session key: bucket directly. Model/system/first-
+		// message changes within the same key never split the session.
+		match = a.byKey[key]
+		if match == nil {
+			match = a.newSession(key, e, norm)
+			a.byKey[key] = match
 		}
-	}
-
-	if match == nil {
-		match = &Summary{
-			ID:          newSessionID(),
-			Name:        a.names[fp],
-			Fingerprint: fp,
-			Provider:    norm.Provider,
-			Model:       norm.Model,
-			StartedAt:   e.StartedAt,
+	} else {
+		// Fallback: fingerprint bucket + longest message-prefix match; fork when
+		// the incoming request diverges from every candidate in the bucket.
+		fp := norm.Fingerprint()
+		match = a.bestPrefixMatch(fp, norm.Messages)
+		if match == nil {
+			match = a.newSession(fp, e, norm)
+			a.bucket[fp] = append(a.bucket[fp], match)
 		}
-		a.sessions[match.ID] = match
-		a.bucket[fp] = append(a.bucket[fp], match)
 	}
 
 	match.EntryIDs = append(match.EntryIDs, e.ID)
 	a.byEntry[e.ID] = match.ID
-	a.last[match.ID] = norm.Messages
-	a.refreshSummary(match.ID, e, norm)
-	go a.notify()
+	if norm != nil {
+		a.last[match.ID] = norm.Messages
+	}
+	a.dirty[match.ID] = struct{}{}
 }
 
-func (a *Aggregator) refreshSummary(sid string, e *store.Entry, norm *llmparse.NormalizedRequest) {
-	s := a.sessions[sid]
-	if s == nil {
-		return
+// newSession mints a session anchored on `anchor` (a client key or a
+// fingerprint). The anchor doubles as the names-persistence key so a
+// user-supplied label re-applies when the same conversation re-aggregates.
+func (a *Aggregator) newSession(anchor string, e *store.Entry, norm *llmparse.NormalizedRequest) *Summary {
+	s := &Summary{
+		ID:          newSessionID(),
+		Name:        a.names[anchor],
+		Fingerprint: anchor,
+		StartedAt:   e.StartedAt,
 	}
-	if e.StartedAt.Before(s.StartedAt) || s.StartedAt.IsZero() {
-		s.StartedAt = e.StartedAt
-	}
-	if e.EndedAt.After(s.LastAt) {
-		s.LastAt = e.EndedAt
-	} else if s.LastAt.IsZero() {
-		s.LastAt = e.StartedAt
-	}
-	s.TurnCount = len(s.EntryIDs)
-	if norm.Model != "" {
+	if norm != nil {
+		s.Provider = norm.Provider
 		s.Model = norm.Model
 	}
-	s.HasStreaming = s.HasStreaming || e.Streaming
-	if e.Error != "" {
-		s.HasError = true
-	}
-	if e.EndedAt.IsZero() {
-		s.HasUnfinished = true
-	}
+	a.sessions[s.ID] = s
+	return s
+}
 
-	// Re-aggregate token usage from scratch — cheap, and avoids drift across
-	// in-stream updates where the same entry's usage changes multiple times.
-	in, out, cr, cc := 0, 0, 0, 0
-	anyError := false
-	anyStream := false
-	anyUnfinished := false
-	for _, eid := range s.EntryIDs {
+// bestPrefixMatch returns the fallback-bucket session whose recorded message
+// list is the LONGEST prefix of msgs (the most specific continuation). Returns
+// nil when every candidate diverges, so the caller forks a new session — this
+// is what keeps two concurrent same-anchor conversations from cross-attributing
+// each other's turns.
+func (a *Aggregator) bestPrefixMatch(fp string, msgs []llmparse.NormalizedMessage) *Summary {
+	var best *Summary
+	bestLen := -1
+	for _, s := range a.bucket[fp] {
+		prev := a.last[s.ID]
+		if isPrefix(prev, msgs) && len(prev) > bestLen {
+			best = s
+			bestLen = len(prev)
+		}
+	}
+	return best
+}
+
+// sessionHeaderSources is the provider-namespaced allowlist of request headers
+// that carry a stable per-conversation id. Only opencode's X-Session-Affinity
+// is supported today; add a row to extend to another client whose header is
+// verified to be a conversation id (not a load-balancer sticky-routing token).
+var sessionHeaderSources = []string{"X-Session-Affinity"}
+
+// sessionKeyOf derives an explicit client session key, or ("", false) when none
+// is present. A replayed entry always gets its own key so it forks into a fresh
+// session (user decision: replays do not pollute the original's rollups).
+func sessionKeyOf(e *store.Entry) (string, bool) {
+	if e.ReplayedFromID != "" {
+		return "replay:" + e.ID, true
+	}
+	for _, h := range sessionHeaderSources {
+		if v := headerValue(e.RequestHeaders, h); v != "" {
+			return "hdr:" + h + ":" + v, true
+		}
+	}
+	return "", false
+}
+
+// headerValue looks up a header case-insensitively. The store keeps canonical
+// keys (e.g. "X-Session-Affinity"), but a case-insensitive fallback guards
+// against any non-canonical capture path.
+func headerValue(hdrs map[string]string, name string) string {
+	if len(hdrs) == 0 {
+		return ""
+	}
+	if v, ok := hdrs[http.CanonicalHeaderKey(name)]; ok {
+		return v
+	}
+	for k, v := range hdrs {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return ""
+}
+
+// rollup is the recomputed summary of one session, produced outside a.mu by
+// computeRollup and written back under a.mu by applyTo.
+type rollup struct {
+	started, last                   time.Time
+	turnCount                       int // non-utility entries only
+	provider                        string
+	model                           string
+	models                          []string
+	in, out, cr, cc                 int
+	anyError, anyStream, unfinished bool
+}
+
+// computeRollup rebuilds a session's rollup from scratch by scanning its entries
+// in the store. It takes NO aggregator lock (only store.Get's own lock), so the
+// caller must pass an entry-id snapshot taken under a.mu. Recompute (not
+// incremental accumulation) is deliberate: in-stream output_tokens is REPLACED
+// on each chunk, not summed, so an incremental delta scheme would drift —
+// re-summing at the flush tick is both correct and cheap.
+func (a *Aggregator) computeRollup(entryIDs []string) rollup {
+	var r rollup
+	seenModel := map[string]bool{}
+	for _, eid := range entryIDs {
 		entry, ok := a.st.Get(eid)
 		if !ok {
 			continue
 		}
+		if r.started.IsZero() || entry.StartedAt.Before(r.started) {
+			r.started = entry.StartedAt
+		}
+		end := entry.EndedAt
+		if end.IsZero() {
+			r.unfinished = true
+			end = entry.StartedAt
+		}
+		if end.After(r.last) {
+			r.last = end
+		}
 		if entry.Error != "" {
-			anyError = true
+			r.anyError = true
 		}
 		if entry.Streaming {
-			anyStream = true
-		}
-		if entry.EndedAt.IsZero() {
-			anyUnfinished = true
+			r.anyStream = true
 		}
 		ana, _ := entry.Analysis.(*llmparse.Analysis)
-		if ana == nil || ana.Anthropic == nil || ana.Anthropic.Response == nil {
+		if ana == nil {
 			continue
 		}
-		if u := ana.Anthropic.Response.Usage; u != nil {
-			in += u.InputTokens
-			out += u.OutputTokens
-			cr += u.CacheReadInputTokens
-			cc += u.CacheCreationInputTokens
+		// Backfill provider from the normalized projection. Header-keyed
+		// sessions mint their Summary at request time (before any analysis), so
+		// newSession can't set Provider — the rollup is the only place it lands.
+		if ana.Normalized != nil && ana.Normalized.Provider != "" {
+			r.provider = ana.Normalized.Provider
+		}
+		if ana.Anthropic == nil {
+			continue
+		}
+		utility := llmparse.IsUtilityRequest(ana)
+		if !utility {
+			r.turnCount++ // sub-task calls (title-gen/summaries) are not turns
+		}
+		model := ""
+		if req := ana.Anthropic.Request; req != nil {
+			model = req.Model
+		}
+		if resp := ana.Anthropic.Response; resp != nil {
+			if resp.Model != "" {
+				model = resp.Model
+			}
+			if u := resp.Usage; u != nil {
+				r.in += u.InputTokens
+				r.out += u.OutputTokens
+				r.cr += u.CacheReadInputTokens
+				r.cc += u.CacheCreationInputTokens
+			}
+		}
+		if model != "" {
+			if !seenModel[model] {
+				seenModel[model] = true
+				r.models = append(r.models, model)
+			}
+			// Primary model prefers the most recent non-utility turn; oldest-first
+			// iteration means the last assignment wins.
+			if !utility || r.model == "" {
+				r.model = model
+			}
 		}
 	}
-	s.InputTokens = in
-	s.OutputTokens = out
-	s.CacheRead = cr
-	s.CacheCreate = cc
-	s.HasError = anyError
-	s.HasStreaming = anyStream
-	s.HasUnfinished = anyUnfinished
+	// Order Models with the primary first so the UI can render "primary +N".
+	if r.model != "" && len(r.models) > 1 {
+		r.models = append([]string{r.model}, removeStr(r.models, r.model)...)
+	}
+	return r
+}
+
+func removeStr(xs []string, target string) []string {
+	out := xs[:0:0]
+	for _, x := range xs {
+		if x != target {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// applyTo writes a computed rollup onto the live summary. Caller holds a.mu.
+func (r rollup) applyTo(s *Summary) {
+	if !r.started.IsZero() {
+		s.StartedAt = r.started
+	}
+	s.LastAt = r.last
+	s.TurnCount = r.turnCount
+	if r.provider != "" {
+		s.Provider = r.provider
+	}
+	if r.model != "" {
+		s.Model = r.model
+	}
+	s.Models = r.models
+	s.InputTokens, s.OutputTokens, s.CacheRead, s.CacheCreate = r.in, r.out, r.cr, r.cc
+	s.HasError, s.HasStreaming, s.HasUnfinished = r.anyError, r.anyStream, r.unfinished
 	switch {
-	case s.HasError:
+	case r.anyError:
 		s.Status = "failed"
-	case s.HasUnfinished:
+	case r.unfinished:
 		s.Status = "active"
 	default:
 		s.Status = "completed"
@@ -430,28 +722,19 @@ func writeNames(path string, names map[string]string) error {
 	return os.WriteFile(path, raw, 0o600)
 }
 
-var sessionSeq uint64
+var sessionSeq atomic.Uint64
 
+// newSessionID returns a process-unique, roughly time-ordered session ID.
+//
+// The previous implementation hashed `millis ^ (counter<<1)` into one base36
+// number, which COLLIDES: two sessions born in adjacent milliseconds with the
+// right counter values map to the same string, and the later
+// `a.sessions[id] = match` silently overwrites the earlier session — entries of
+// the lost session then read as "unsessioned". The monotonic counter alone
+// guarantees uniqueness; the millisecond prefix only gives a rough creation
+// order. The '-' separator keeps the variable-length prefix/suffix from
+// concatenating ambiguously (e.g. "abc"+"1" vs "ab"+"c1").
 func newSessionID() string {
-	// Combine wall-clock + a monotonic counter so two sessions born in the
-	// same millisecond don't collide.
-	sessionSeq++
-	return formatID(time.Now().UnixMilli(), sessionSeq)
-}
-
-func formatID(now int64, n uint64) string {
-	const digits = "0123456789abcdefghijklmnopqrstuvwxyz"
-	buf := make([]byte, 0, 16)
-	v := uint64(now) ^ (n << 1)
-	if v == 0 {
-		return "s-0"
-	}
-	for v > 0 {
-		buf = append(buf, digits[v%36])
-		v /= 36
-	}
-	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
-		buf[i], buf[j] = buf[j], buf[i]
-	}
-	return "s-" + string(buf)
+	n := sessionSeq.Add(1)
+	return "s-" + strconv.FormatInt(time.Now().UnixMilli(), 36) + "-" + strconv.FormatUint(n, 36)
 }

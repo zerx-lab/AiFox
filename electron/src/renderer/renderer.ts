@@ -4,9 +4,11 @@
 import { getClient } from "../api/client";
 import { setLanguage } from "./i18n";
 import { mountApp } from "./ui/app";
+import { initSelection } from "./ui/selection";
 import { openSse } from "./ui/sse";
 import {
   type Breakpoint,
+  type EntryMeta,
   type PausedRequest,
   replaceBreakpoints,
   replaceEntries,
@@ -14,7 +16,6 @@ import {
   setState,
   upsertEntry,
   type SessionSummary,
-  type TrafficEntry,
 } from "./ui/state";
 import { initTheme, setTheme, type ThemeChoice } from "./ui/theme";
 
@@ -61,16 +62,18 @@ async function bootstrap() {
   if (proxyResp.data) setState({ proxy: proxyResp.data });
 
   mountApp(root);
+  // Keep selectedEntry (full body) in sync with selectedId, fetching on demand.
+  initSelection();
 
   // The SSE stream sends a "snapshot" of the current buffer on connect, then
-  // "entry" events for every new or updated capture. We don't need a separate
-  // initial GET /v1/traffic because of that.
+  // "entry" events for every new or updated capture (lightweight EntryMeta —
+  // bodies are fetched per entry on selection). No separate initial GET needed.
   void openSse("/v1/traffic/stream", (ev) => {
     if (ev.event === "snapshot") {
-      const items = JSON.parse(ev.data) as TrafficEntry[];
+      const items = JSON.parse(ev.data) as EntryMeta[];
       replaceEntries(items);
     } else if (ev.event === "entry") {
-      const entry = JSON.parse(ev.data) as TrafficEntry;
+      const entry = JSON.parse(ev.data) as EntryMeta;
       upsertEntry(entry);
     } else if (ev.event === "sessions") {
       const items = JSON.parse(ev.data) as SessionSummary[];

@@ -46,6 +46,14 @@ tasks:
     cmds:
       - go test ./...
 
+  test:go:race:
+    desc: Run the race detector on the concurrency-critical packages (store/session/server)
+    cmds:
+      # The clone-on-handout race fix and the aggregator's coalescing/reconcile
+      # paths are only guarded by -race. The harness exercises concurrent streams;
+      # scope -race to these packages so the gate stays fast.
+      - go test -race ./internal/store ./internal/session ./internal/server
+
   lint:go:
     desc: Run golangci-lint (govet/nilness, staticcheck, errcheck, ineffassign, unused, gofmt)
     cmds:
@@ -92,8 +100,8 @@ tasks:
     deps: [lint:go, lint:ts]
 
   verify:
-    desc: Acceptance gate before commit (typecheck + tests + lint)
-    deps: [typecheck, test:go, lint]
+    desc: Acceptance gate before commit (typecheck + tests + race + lint)
+    deps: [typecheck, test:go, test:go:race, lint]
 
   # ---- Composite ----
 

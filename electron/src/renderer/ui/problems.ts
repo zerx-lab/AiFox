@@ -1,14 +1,17 @@
-// Problems tab — aggregates anything actionable across all entries:
-// proxy errors, 4xx/5xx responses, failing tool_results, parser warnings.
-// Click a row to jump to the offending entry.
+// Problems tab — aggregates actionable issues from the entry list.
+// Covers proxy errors, 4xx/5xx HTTP responses, streamed (HTTP-200) upstream
+// API errors, and parser warnings — all from the lightweight EntryMeta
+// projection (hasResponseError / warningCount are server-derived flags). Click
+// a row to jump to the offending entry, where the full message is shown.
+//
+// NOTE: Per-tool-result errors and individual warning/error messages are not in
+// the list view; the row points at the entry and the selected-entry detail view
+// shows the specifics.
 
-import type { components } from "../../api/client";
 import { t } from "../i18n";
 import { h } from "./dom";
 import { fmtClock } from "./format";
-import { getState, setState, type TrafficEntry } from "./state";
-
-type Analysis = components["schemas"]["Analysis"];
+import { getState, setState, type EntryMeta } from "./state";
 
 interface Problem {
   entryId: string;
@@ -20,7 +23,7 @@ interface Problem {
 
 export function renderProblems(): HTMLElement {
   const state = getState();
-  const problems = collectProblems(state.entries);
+  const problems = collectProblems(state.entries as EntryMeta[]);
   if (problems.length === 0) {
     return h("div.detail-empty", null, t("bottom.problemsNone"));
   }
@@ -55,7 +58,7 @@ export function renderProblems(): HTMLElement {
   return wrap;
 }
 
-function collectProblems(entries: TrafficEntry[]): Problem[] {
+function collectProblems(entries: EntryMeta[]): Problem[] {
   const out: Problem[] = [];
   // chronological (oldest first) so the user reads top-down
   const chrono = [...entries].reverse();
@@ -76,45 +79,26 @@ function collectProblems(entries: TrafficEntry[]): Problem[] {
         message: t("bottom.problemHttpErr", { url: e.url || "/" }),
         level: e.statusCode >= 500 ? "err" : "warn",
       });
-    }
-
-    const analysis = e.analysis as Analysis | undefined;
-    if (analysis?.anthropic?.response?.error) {
-      const err = analysis.anthropic.response.error;
+    } else if (e.hasResponseError) {
+      // Upstream/API error returned in the response body (e.g. an Anthropic
+      // error envelope on a streamed HTTP 200) — invisible to e.error/status.
       out.push({
         entryId: e.id,
         time: fmtClock(e.endedAt || e.startedAt),
-        where: `${e.id} · ${err.type || "error"}`,
-        message: err.message ?? "",
+        where: `${e.id} · API`,
+        message: t("bottom.problemApiErr"),
         level: "err",
       });
     }
 
-    // Failing tool_results
-    for (const m of analysis?.anthropic?.request?.messages ?? []) {
-      for (const blk of m.content ?? []) {
-        if (blk.type === "tool_result" && blk.isError === true) {
-          out.push({
-            entryId: e.id,
-            time: fmtClock(e.startedAt),
-            where: `${e.id} · tool ${blk.toolUseId ?? "?"}`,
-            message: t("bottom.problemToolErr"),
-            level: "err",
-          });
-        }
-      }
-    }
-
-    if ((analysis?.warnings?.length ?? 0) > 0) {
-      for (const w of analysis?.warnings ?? []) {
-        out.push({
-          entryId: e.id,
-          time: fmtClock(e.startedAt),
-          where: `${e.id} · parser`,
-          message: w,
-          level: "warn",
-        });
-      }
+    if (e.warningCount > 0) {
+      out.push({
+        entryId: e.id,
+        time: fmtClock(e.startedAt),
+        where: `${e.id} · parser`,
+        message: t("bottom.problemWarnings", { count: e.warningCount }),
+        level: "warn",
+      });
     }
   }
   return out;

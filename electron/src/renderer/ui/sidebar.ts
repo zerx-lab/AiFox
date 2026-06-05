@@ -5,7 +5,6 @@
 // Filters apply to the entry layer; a session that ends up with zero
 // matching entries is hidden until the filter clears.
 
-import type { components } from "../../api/client";
 import { getClient } from "../../api/client";
 import { t } from "../i18n";
 import { h } from "./dom";
@@ -20,11 +19,9 @@ import {
   setState,
   toggleGroupCollapsed,
   toggleSessionExpanded,
+  type EntryMeta,
   type SessionSummary,
-  type TrafficEntry,
 } from "./state";
-
-type Analysis = components["schemas"]["Analysis"];
 
 export function renderSidebar(): HTMLElement {
   const state = getState();
@@ -81,19 +78,19 @@ export function renderSidebar(): HTMLElement {
 function appendSessionList(
   root: HTMLElement,
   sessions: SessionSummary[],
-  filtered: TrafficEntry[],
+  filtered: EntryMeta[],
 ) {
   const state = getState();
 
   // Build a fast lookup: visible entries by sessionId; ones without any
   // session land in the "unsessioned" bucket.
   const visibleIds = new Set(filtered.map((e) => e.id));
-  const bySession = new Map<string, TrafficEntry[]>();
-  const unsessioned: TrafficEntry[] = [];
+  const bySession = new Map<string, EntryMeta[]>();
+  const unsessioned: EntryMeta[] = [];
 
   // First, fold known sessions in.
   for (const s of sessions) {
-    const visible: TrafficEntry[] = [];
+    const visible: EntryMeta[] = [];
     for (const id of s.entryIds ?? []) {
       if (!visibleIds.has(id)) continue;
       const entry = state.entries.find((e) => e.id === id);
@@ -125,7 +122,7 @@ function appendSessionList(
   }
 }
 
-function renderSessionGroup(s: SessionSummary, entries: TrafficEntry[]): HTMLElement {
+function renderSessionGroup(s: SessionSummary, entries: EntryMeta[]): HTMLElement {
   const state = getState();
   const expanded = state.expandedSessions.has(s.id);
   const active = state.selectedSessionId === s.id;
@@ -187,6 +184,7 @@ function renderSessionGroup(s: SessionSummary, entries: TrafficEntry[]): HTMLEle
       null,
     ),
     labelNode,
+    modelLabel(s) ? h("span.tree-group-model", { title: modelHint }, modelLabel(s)) : null,
     renameBtn,
     h(
       "span.tree-group-meta",
@@ -264,7 +262,7 @@ function renameInput(s: SessionSummary, initial: string): HTMLInputElement {
   return input;
 }
 
-function renderRawGroup(key: string, label: string, entries: TrafficEntry[]): HTMLElement {
+function renderRawGroup(key: string, label: string, entries: EntryMeta[]): HTMLElement {
   const state = getState();
   const collapsed = state.collapsedGroups.has(key);
   return h(
@@ -283,7 +281,7 @@ function renderRawGroup(key: string, label: string, entries: TrafficEntry[]): HT
   );
 }
 
-function entryRow(entry: TrafficEntry): HTMLElement {
+function entryRow(entry: EntryMeta): HTMLElement {
   const state = getState();
   const active = state.selectedId === entry.id;
   const kind = statusKind(entry);
@@ -298,15 +296,12 @@ function entryRow(entry: TrafficEntry): HTMLElement {
           ? "SSE"
           : String(entry.statusCode);
 
-  const analysis = entry.analysis as Analysis | undefined;
-  const model = analysis?.anthropic?.request?.model || analysis?.anthropic?.response?.model;
-  const usage = analysis?.anthropic?.response?.usage;
-  const totalTok = usage
-    ? (usage.inputTokens ?? 0) +
-      (usage.outputTokens ?? 0) +
-      (usage.cacheReadInputTokens ?? 0) +
-      (usage.cacheCreationInputTokens ?? 0)
-    : 0;
+  const model = entry.model || undefined;
+  const totalTok =
+    (entry.inputTokens ?? 0) +
+    (entry.outputTokens ?? 0) +
+    (entry.cacheRead ?? 0) +
+    (entry.cacheCreate ?? 0);
 
   return h(
     "div",
@@ -326,6 +321,7 @@ function entryRow(entry: TrafficEntry): HTMLElement {
       "span.sub",
       null,
       h("span", null, fmtTime(entry.startedAt)),
+      entry.isUtility ? h("span.entry-utility", { title: t("sidebar.utilityHint") }, "sub-task") : null,
       totalTok > 0 ? h("span", null, `${totalTok.toLocaleString()} tok`) : null,
       entry.streaming ? h("span", null, "stream") : null,
       entry.truncated ? h("span", null, "truncated") : null,
@@ -336,8 +332,26 @@ function entryRow(entry: TrafficEntry): HTMLElement {
 
 function statusDot(s: SessionSummary): string {
   if (s.hasError) return "err";
-  if (s.hasUnfinished) return "warn";
+  if (s.hasUnfinished) return "live"; // in-flight turn → pulsing dot
   return "ok";
+}
+
+// modelLabel renders a session's model(s) compactly: a single short name, or a
+// mixed "opus·haiku" for sessions that span models (e.g. opencode's main model
+// plus its haiku title-gen), or "opus +2" when many.
+function modelLabel(s: SessionSummary): string {
+  const models = s.models && s.models.length > 0 ? s.models : s.model ? [s.model] : [];
+  const short = models.map(shortModel).filter((m, i, a) => a.indexOf(m) === i);
+  if (short.length === 0) return "";
+  if (short.length <= 2) return short.join("·");
+  return `${short[0]} +${short.length - 1}`;
+}
+
+// shortModel strips the vendor prefix and date suffix: "claude-opus-4-8" →
+// "opus", "claude-haiku-4-5-20251001" → "haiku", "gpt-4o" → "gpt-4o".
+function shortModel(model: string): string {
+  const m = model.match(/(?:claude-)?([a-z]+)/i);
+  return m?.[1] ? m[1] : model;
 }
 
 function fmtTok(n: number): string {

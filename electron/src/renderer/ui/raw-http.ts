@@ -53,18 +53,47 @@ function renderRaw(
   }
   pre.appendChild(text("\n"));
 
+  // While the response streams we show RAW, un-highlighted bytes in an
+  // appendable holder: app.ts patches new tail bytes into it in place (see
+  // patchLiveBody) so the body never re-formats/re-highlights on each poll tick
+  // and the user's text selection survives. Once finalized we render the
+  // formatted + highlighted view.
+  const liveResponse = kind === "response" && isStreamingLive(entry);
   if (body) {
-    const formatted = formatBody(body, headers);
-    pre.appendChild(highlight(formatted.text, formatted.kind));
+    if (liveResponse) {
+      const holder = span(body, "rh-live-body");
+      pre.appendChild(holder);
+      pre.dataset.liveResponse = "1";
+      pre.dataset.renderedLen = String(body.length);
+    } else {
+      const formatted = formatBody(body, headers);
+      pre.appendChild(highlight(formatted.text, formatted.kind));
+    }
   } else {
-    pre.appendChild(span(`(${t("detail.bodyEmpty")})`, "rh-empty"));
+    if (liveResponse) {
+      const holder = span("", "rh-live-body");
+      pre.appendChild(holder);
+      pre.dataset.liveResponse = "1";
+      pre.dataset.renderedLen = "0";
+    } else {
+      pre.appendChild(span(`(${t("detail.bodyEmpty")})`, "rh-empty"));
+    }
   }
 
-  if (kind === "response" && entry.streaming && !entry.endedAt) {
+  if (liveResponse) {
     pre.appendChild(text("\n"));
     pre.appendChild(span(`▍ ${t("detail.streamingLive")}`, "rh-streaming"));
   }
   return pre;
+}
+
+// isStreamingLive reports a response that is mid-stream (streaming flag set and
+// not yet finalized). Go's zero EndedAt marshals to a pre-1970 string, so a
+// truthy `endedAt` does NOT mean finished — require a positive epoch.
+function isStreamingLive(entry: TrafficEntry): boolean {
+  if (!entry.streaming) return false;
+  const ended = entry.endedAt ? new Date(entry.endedAt).getTime() : 0;
+  return ended <= 0;
 }
 
 function span(content: string, klass: string): HTMLSpanElement {

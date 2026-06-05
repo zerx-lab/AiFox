@@ -42,6 +42,7 @@ export const en = {
     confirmClear: "Discard all captured traffic?",
     unsessioned: "Other endpoints",
     rename: "Rename session",
+    utilityHint: "Sub-task call (title/summary) — not counted as a turn",
   },
   detail: {
     selectPrompt: "Select a request from the list to inspect it.",
@@ -250,6 +251,8 @@ export const en = {
     problemsNone: "No problems detected.",
     problemHttpErr: "HTTP error response on {url}",
     problemToolErr: "tool_result reported is_error=true",
+    problemApiErr: "Upstream API error in response body",
+    problemWarnings: "{count} parser warning(s) — open to inspect",
     breakpointsPlaceholder: "Breakpoints arrive in a later milestone.",
   },
   bp: {

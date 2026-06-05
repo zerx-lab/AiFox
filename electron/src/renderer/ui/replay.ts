@@ -5,7 +5,7 @@
 import { getClient } from "../../api/client";
 import { t } from "../i18n";
 import { h } from "./dom";
-import { getState, setReplayOpen, setState, type TrafficEntry } from "./state";
+import { getState, selectedFull, setReplayOpen, setState, type TrafficEntry } from "./state";
 
 interface Draft {
   model: string;
@@ -17,7 +17,8 @@ interface Draft {
 export function renderReplayPopover(): HTMLElement | null {
   const state = getState();
   if (!state.replayOpen) return null;
-  const entry = state.entries.find((e) => e.id === state.selectedId);
+  // selectedFull() returns the loaded full TrafficEntry; null while loading.
+  const entry = selectedFull();
   if (!entry) return null;
 
   const draft: Draft = {

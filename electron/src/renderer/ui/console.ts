@@ -1,14 +1,15 @@
 // Console tab — chronological log derived from captured entries.
-// Each entry produces one or two lines (start + finish); tool calls produce
-// indented children. Errors get an err level.
+// Each entry produces one or two lines (start + finish/error).
+// Errors get an err level.
+//
+// NOTE: Per-tool call detail (tool_use/tool_result rows) and per-request
+// analysis data (warnings, model response errors) are no longer available
+// in the list — they live in the selected-entry detail view (meta-only list).
 
-import type { components } from "../../api/client";
 import { t } from "../i18n";
 import { h } from "./dom";
 import { fmtClock, fmtDuration } from "./format";
-import { getState, setState, type TrafficEntry } from "./state";
-
-type Analysis = components["schemas"]["Analysis"];
+import { getState, setState, type EntryMeta } from "./state";
 
 type Level = "info" | "warn" | "err";
 
@@ -22,7 +23,7 @@ interface Line {
 
 export function renderConsole(): HTMLElement {
   const state = getState();
-  const lines = buildLines(state.entries);
+  const lines = buildLines(state.entries as EntryMeta[]);
   const wrap = h("div.console-log");
   if (lines.length === 0) {
     wrap.appendChild(h("div.detail-empty", null, t("bottom.consoleEmpty")));
@@ -52,7 +53,7 @@ export function renderConsole(): HTMLElement {
   return wrap;
 }
 
-function buildLines(entries: TrafficEntry[]): Line[] {
+function buildLines(entries: EntryMeta[]): Line[] {
   const out: Line[] = [];
   // newest first in entries; reverse to get a chronological feed.
   const chrono = [...entries].reverse();
@@ -67,70 +68,21 @@ function buildLines(entries: TrafficEntry[]): Line[] {
       }),
     });
 
-    const analysis = e.analysis as Analysis | undefined;
-    if (analysis?.anthropic?.response) {
-      const u = analysis.anthropic.response.usage;
-      const tokens = u
-        ? `${(u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0)} in / ${u.outputTokens ?? 0} out`
-        : "no usage";
+    // Assistant summary line: available via meta fields when hasStructured.
+    // Per-tool call detail now lives in the selected-entry detail view.
+    if (e.hasStructured) {
+      const tokens = `${(e.inputTokens ?? 0) + (e.cacheRead ?? 0) + (e.cacheCreate ?? 0)} in / ${e.outputTokens ?? 0} out`;
       out.push({
         entryId: e.id,
         time: fmtClock(e.startedAt),
         level: "info",
         text: t("bottom.consoleAssistant", {
-          model: analysis.anthropic.response.model || analysis.anthropic.request?.model || "—",
+          model: e.model || "—",
           tokens,
           duration: fmtDuration(e.durationMillis),
         }),
         indent: 1,
       });
-    }
-
-    // tool_use blocks
-    if (analysis?.anthropic) {
-      const tools: Array<{ name: string; id: string; ok: boolean | null }> = [];
-      const results = new Map<string, boolean>();
-      for (const m of analysis.anthropic.request?.messages ?? []) {
-        for (const blk of m.content ?? []) {
-          if (blk.type === "tool_result" && blk.toolUseId) {
-            results.set(blk.toolUseId, blk.isError === true);
-          }
-        }
-      }
-      for (const m of analysis.anthropic.request?.messages ?? []) {
-        for (const blk of m.content ?? []) {
-          if (blk.type === "tool_use" && blk.id) {
-            const err = results.get(blk.id);
-            tools.push({
-              name: blk.name ?? "?",
-              id: blk.id,
-              ok: err === undefined ? null : !err,
-            });
-          }
-        }
-      }
-      for (const blk of analysis.anthropic.response?.content ?? []) {
-        if (blk.type === "tool_use" && blk.id) {
-          tools.push({
-            name: blk.name ?? "?",
-            id: blk.id,
-            ok: null,
-          });
-        }
-      }
-      for (const tc of tools) {
-        const lvl: Level = tc.ok === false ? "err" : "info";
-        out.push({
-          entryId: e.id,
-          time: fmtClock(e.startedAt),
-          level: lvl,
-          text: t("bottom.consoleTool", {
-            name: tc.name,
-            status: tc.ok === null ? "pending" : tc.ok ? "ok" : "fail",
-          }),
-          indent: 2,
-        });
-      }
     }
 
     if (e.error) {
