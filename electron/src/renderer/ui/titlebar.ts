@@ -132,13 +132,12 @@ async function persistSetting(patch: Partial<Settings>) {
   setState({ settings: data ?? next });
 }
 
-// AiFox brand logo, mirrors assets/logo/relay-bridge.svg. viewBox is cropped
-// to the artwork's bounds (content sits high in the 120x120 source) so it
-// reads as centered in the small titlebar slot.
+// AiFox brand logo, mirrors assets/logo/relay-bridge.svg. Shown at the full
+// 120x120 viewBox so the whole mark is legible in the titlebar.
 function brandMark(): SVGElement {
   const wrap = document.createElement("div");
   wrap.innerHTML =
-    '<svg class="titlebar-brand-mark" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="16 22 88 88" aria-hidden="true">' +
+    '<svg class="titlebar-brand-mark" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 120 120" aria-hidden="true">' +
     '<circle cx="26" cy="52" r="8" fill="#9AA5B1"/>' +
     '<circle cx="94" cy="52" r="8" fill="#9AA5B1"/>' +
     '<path d="M34 52 H86" stroke="#9AA5B1" stroke-width="6" stroke-linecap="round"/>' +
