@@ -107,7 +107,7 @@ ai-fox/
 
 ## 状态
 
-早期开发中。反向代理与 Anthropic 流式解析已经能用，更多 provider、持久化加密、上游配置 UI 在路上。
+开发中。反向代理、断点拦截、请求重放、会话聚合、Anthropic Messages 全量解析（流式 + 非流式）已可用；OpenAI / Codex（Responses API）解析、密钥加密落盘在路上（路线图见 `docs/PLAN.md`）。
 
 ## License
 
