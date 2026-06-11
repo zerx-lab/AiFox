@@ -8,7 +8,16 @@
 
 import type { components } from "../../api/client";
 import { t } from "../i18n";
+import { togglePathBreakpoint } from "./api-service";
 import { renderCallStack } from "./callstack";
+import {
+  type ConvoRow,
+  type ConvoUsage,
+  mapOpenAI,
+  mapResponses,
+  renderPart,
+  rolePalette,
+} from "./convo";
 import { h } from "./dom";
 import { fmtDuration, fmtTime, statusKind } from "./format";
 import { highlight } from "./highlight";
@@ -33,6 +42,8 @@ type AnthropicResponse = components["schemas"]["AnthropicResponse"];
 type AnthropicBlock = components["schemas"]["AnthropicBlock"];
 type AnthropicTool = components["schemas"]["AnthropicTool"];
 type AnthropicUsage = components["schemas"]["AnthropicUsage"];
+type OpenAIAnalysis = components["schemas"]["OpenAIAnalysis"];
+type ResponsesAnalysis = components["schemas"]["ResponsesAnalysis"];
 
 export function renderTimeline(): HTMLElement {
   const state = getState();
@@ -86,10 +97,24 @@ export function renderTimeline(): HTMLElement {
   } else {
     const analysis = entry.analysis as Analysis | undefined;
     if (analysis?.anthropic) {
-      root.appendChild(renderAnthropic(analysis.anthropic, analysis.warnings ?? []));
+      root.appendChild(renderAnthropic(entry, analysis.anthropic, analysis.warnings ?? []));
+    } else if (analysis?.openai) {
+      root.appendChild(renderOpenAI(entry, analysis.openai));
+    } else if (analysis?.responses) {
+      root.appendChild(renderResponses(entry, analysis.responses));
     } else {
       root.appendChild(renderGeneric(entry, analysis));
     }
+  }
+  // After the DOM settles, scroll the selected card into view (§4.2 / task 5):
+  // an entry-bar chip switch or selectMessage should bring its card into the
+  // viewport. rAF so layout exists before we measure.
+  if (state.selection.messageKey) {
+    const key = state.selection.messageKey;
+    requestAnimationFrame(() => {
+      const card = root.querySelector<HTMLElement>(`[data-card-key="${cssEscape(key)}"]`);
+      card?.scrollIntoView({ block: "nearest" });
+    });
   }
   const popover = renderReplayPopover();
   if (popover) root.appendChild(popover);
@@ -294,7 +319,11 @@ function renderGeneric(entry: TrafficEntry, analysis?: Analysis): HTMLElement {
   );
 }
 
-function renderAnthropic(a: AnthropicAnalysis, warnings: string[]): HTMLElement {
+function renderAnthropic(
+  entry: TrafficEntry,
+  a: AnthropicAnalysis,
+  warnings: string[],
+): HTMLElement {
   const body = h("div.tl-body");
 
   if (warnings.length > 0) {
@@ -313,30 +342,139 @@ function renderAnthropic(a: AnthropicAnalysis, warnings: string[]): HTMLElement 
   // surface the matching result on the right.
   const toolResults = collectToolResults(a.request);
 
-  if (a.request) renderRequestTimeline(body, a.request, toolResults);
-  if (a.response) renderResponseTimeline(body, a.response, toolResults);
+  if (a.request) renderRequestTimeline(entry, body, a.request, toolResults);
+  if (a.response) renderResponseTimeline(entry, body, a.response, toolResults);
   return body;
 }
 
+// renderOpenAI / renderResponses share the rail-row path: the provider mapper
+// returns ConvoRow[] (provider-neutral) and each row becomes a card built from
+// renderPart, wrapped in the timestamped rail (railRow). The assistant row
+// carries usage → the per-card footer; the entry cost surfaces there too.
+function renderOpenAI(entry: TrafficEntry, a: OpenAIAnalysis): HTMLElement {
+  return renderConvoRows(entry, mapOpenAI(a));
+}
+
+function renderResponses(entry: TrafficEntry, a: ResponsesAnalysis): HTMLElement {
+  return renderConvoRows(entry, mapResponses(a));
+}
+
+function renderConvoRows(entry: TrafficEntry, rows: ConvoRow[]): HTMLElement {
+  const body = h("div.tl-body");
+  if (rows.length === 0) {
+    body.appendChild(h("div.tl-empty-block", null, t("conversation.responseEmpty")));
+    return body;
+  }
+  for (const row of rows) {
+    if (row.usage && row.cost == null) row.cost = entryCost(entry.id);
+    const card = convoCard(row);
+    body.appendChild(railRow(entry, row.role, card));
+  }
+  return body;
+}
+
+// convoCard renders one provider-neutral ConvoRow into a collapsible card with
+// the same expand/collapse + footer affordances as Anthropic messageCard.
+function convoCard(row: ConvoRow): HTMLElement {
+  const state = getState();
+  const key = row.key;
+  const selected = state.selection.messageKey === key && !state.selection.toolUseId;
+  const charLen = estimatePartsLength(row.parts);
+  const collapsible = charLen >= COLLAPSE_THRESHOLD_CHARS;
+  const expanded = !collapsible || state.expandedMessages.has(key);
+  const palette = rolePalette(row.role);
+
+  const head = h(
+    "div.tl-card-head",
+    null,
+    collapsible
+      ? h(
+          "button",
+          {
+            class: "tl-card-toggle",
+            title: expanded ? t("conversation.collapse") : t("conversation.expand"),
+            "aria-expanded": expanded ? "true" : "false",
+            onclick: (e: Event) => {
+              e.stopPropagation();
+              toggleMessageExpanded(key);
+            },
+          },
+          expanded ? "▾" : "▸",
+        )
+      : null,
+    h(`span.role-chip.role-${palette}`, null, row.role),
+    row.sub ? h("span.tl-card-sub", null, row.sub) : null,
+  );
+
+  const cardClasses = [
+    "tl-card",
+    `role-${palette}`,
+    selected ? "selected" : "",
+    collapsible && !expanded ? "collapsed" : "",
+  ]
+    .filter(Boolean)
+    .join(".");
+
+  const card = h(
+    `div.${cardClasses}`,
+    {
+      dataset: { cardKey: key },
+      onclick: () => selectMessage(key),
+    },
+    head,
+  );
+
+  if (row.parts.length === 0) {
+    card.appendChild(h("div.tl-empty-block", null, t("conversation.responseEmpty")));
+  } else {
+    const bodyEl = h("div.tl-card-body");
+    for (const part of row.parts) bodyEl.appendChild(renderPart(part));
+    card.appendChild(bodyEl);
+  }
+
+  if (row.usage) card.appendChild(usageFooter(row.usage, row.cost ?? null));
+
+  if (collapsible && !expanded) {
+    card.appendChild(
+      h(
+        "button.tl-card-expand",
+        {
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            toggleMessageExpanded(key);
+          },
+        },
+        t("conversation.expand"),
+      ),
+    );
+  }
+  return card;
+}
+
 function renderRequestTimeline(
+  entry: TrafficEntry,
   parent: HTMLElement,
   req: AnthropicRequest,
   toolResults: Map<string, AnthropicBlock>,
 ) {
   if (req.system && req.system.length > 0) {
-    parent.appendChild(messageCard("sys", "system", null, req.system, toolResults));
+    parent.appendChild(
+      railRow(entry, "system", messageCard("sys", "system", null, req.system, toolResults)),
+    );
   }
   if (req.tools && req.tools.length > 0) {
-    parent.appendChild(toolsCard(req.tools));
+    parent.appendChild(railRow(entry, "tools", toolsCard(req.tools)));
   }
   (req.messages ?? []).forEach((msg, i) => {
+    const role = msg.role || "user";
     parent.appendChild(
-      messageCard(`req-${i}`, msg.role || "user", null, msg.content ?? [], toolResults),
+      railRow(entry, role, messageCard(`req-${i}`, role, null, msg.content ?? [], toolResults)),
     );
   });
 }
 
 function renderResponseTimeline(
+  entry: TrafficEntry,
   parent: HTMLElement,
   resp: AnthropicResponse,
   toolResults: Map<string, AnthropicBlock>,
@@ -358,9 +496,12 @@ function renderResponseTimeline(
     : resp.streamed
       ? t("conversation.stream")
       : null;
-  parent.appendChild(
-    messageCard("resp", role, sub, resp.content ?? [], toolResults),
-  );
+  const card = messageCard("resp", role, sub, resp.content ?? [], toolResults);
+  // Assistant response card gets the per-turn usage footer (cache/in/out pills
+  // + cost + cache-ratio bar) — §4.2.
+  const usage = resp.usage ? anthUsage(resp.usage) : null;
+  if (usage) card.appendChild(usageFooter(usage, entryCost(entry.id)));
+  parent.appendChild(railRow(entry, role, card));
 }
 
 // Rough character-count threshold below which a card always renders fully
@@ -416,6 +557,7 @@ function messageCard(
   const card = h(
     `div.${cardClasses}`,
     {
+      dataset: { cardKey: key },
       onclick: () => selectMessage(key),
     },
     head,
@@ -875,4 +1017,109 @@ function fmtTok(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
+}
+
+// ---- Rail layout (§4.2) -----------------------------------------------------
+
+// railRow wraps a card in the three-column timeline grid: a HH:MM:SS timestamp,
+// a vertical rail with a role-coloured node + a breakpoint gutter, and the card
+// itself. Clicking the gutter (or an existing breakpoint dot) toggles a path
+// breakpoint for this entry's endpoint via the service layer; an already-matched
+// breakpoint shows a solid red node.
+function railRow(entry: TrafficEntry, role: string, card: HTMLElement): HTMLElement {
+  const palette = rolePalette(role);
+  const time = h("div.tl-time", null, fmtTime(entry.startedAt));
+
+  const node = h(`span.tl-node.tl-node-${palette}`);
+  const path = breakpointPath(entry);
+  const existing = path ? matchedBreakpoint(path) : null;
+  const gutter = h("button.tl-bp-gutter", {
+    type: "button",
+    title: existing ? t("timeline.bpRemove") : t("timeline.bpAdd"),
+    "aria-label": existing ? t("timeline.bpRemove") : t("timeline.bpAdd"),
+    onclick: (e: Event) => {
+      e.stopPropagation();
+      if (!path) return;
+      void togglePathBreakpoint(path, getState().breakpoints);
+    },
+  });
+  if (existing) gutter.classList.add("has-bp");
+  const rail = h("div.tl-rail", null, node, gutter);
+
+  return h("div.tl-row", null, time, rail, h("div.tl-content", null, card));
+}
+
+// breakpointPath derives the path-match pattern for an entry's endpoint. Path
+// breakpoints match the request URL path, so we use the analysis endpoint label
+// when present (e.g. "/v1/messages"), else the raw URL.
+function breakpointPath(entry: TrafficEntry): string {
+  const analysis = entry.analysis as Analysis | undefined;
+  if (analysis?.endpoint) return analysis.endpoint;
+  const url = entry.url || "";
+  try {
+    return new URL(url, "http://x").pathname;
+  } catch {
+    return url;
+  }
+}
+
+function matchedBreakpoint(path: string) {
+  return getState().breakpoints.find(
+    (b) => b.match === "path" && b.pattern === path && b.enabled,
+  );
+}
+
+// usageFooter renders the per-card usage strip: cache-read / new-input / output
+// pills, a cost pill, and a 4px cache-ratio bar (cache_read / total input).
+function usageFooter(u: ConvoUsage, cost: number | null): HTMLElement {
+  const totalIn = u.cacheRead + u.input;
+  const ratio = totalIn > 0 ? u.cacheRead / totalIn : 0;
+  const pills: HTMLElement[] = [];
+  if (u.cacheRead > 0)
+    pills.push(h("span.tl-pill.cached", null, `cache ${fmtTok(u.cacheRead)}`));
+  if (u.input > 0) pills.push(h("span.tl-pill.new", null, `new ${fmtTok(u.input)}`));
+  if (u.output > 0) pills.push(h("span.tl-pill", null, `out ${fmtTok(u.output)}`));
+  const bar = h("span.tl-ratio");
+  const fill = h("i");
+  fill.style.width = `${Math.round(ratio * 100)}%`;
+  bar.appendChild(fill);
+  pills.push(bar);
+  if (cost != null && cost > 0)
+    pills.push(h("span.tl-pill.cost", null, `$${cost.toFixed(4)}`));
+  return h("div.tl-foot", null, ...pills);
+}
+
+function anthUsage(u: AnthropicUsage): ConvoUsage {
+  const cacheRead = u.cacheReadInputTokens ?? 0;
+  const cacheCreate = u.cacheCreationInputTokens ?? 0;
+  return {
+    cacheRead,
+    // "new" input = uncached input plus cache-creation writes (newly seen).
+    input: (u.inputTokens ?? 0) + cacheCreate,
+    output: u.outputTokens ?? 0,
+  };
+}
+
+// entryCost reads the entry-level cost estimate off the EntryMeta projection in
+// the list (the full TrafficEntry doesn't carry cost). null when unknown.
+function entryCost(id: string): number | null {
+  const meta = getState().entries.find((e) => e.id === id);
+  return meta?.cost ?? null;
+}
+
+function estimatePartsLength(parts: ConvoRow["parts"]): number {
+  let total = 0;
+  for (const p of parts) {
+    const part = p as { text?: string; input?: unknown; content?: unknown };
+    if (typeof part.text === "string") total += part.text.length;
+    if (part.input !== undefined) total += safeStringifyLength(part.input);
+    if (part.content !== undefined) total += safeStringifyLength(part.content);
+    total += 24;
+  }
+  return total;
+}
+
+// cssEscape: minimal attribute-selector escaper for data-card-key lookups.
+function cssEscape(s: string): string {
+  return s.replace(/["\\]/g, "\\$&");
 }

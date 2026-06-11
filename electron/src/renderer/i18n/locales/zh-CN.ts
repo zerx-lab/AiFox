@@ -37,7 +37,8 @@ export const zhCN: Dictionary = {
   sidebar: {
     empty: "暂无抓到的请求。",
     emptyHint: "把上方代理地址配置给你的 AI 客户端，再发起一次请求即可。",
-    filterPlaceholder: "按路径或状态过滤",
+    filterPlaceholder: "按路径、状态或模型过滤…",
+    filterClear: "清除过滤",
     clear: "清空",
     confirmClear: "确定要丢弃全部抓取的流量吗？",
     unsessioned: "其它端点",
@@ -55,6 +56,7 @@ export const zhCN: Dictionary = {
       headers: "Headers",
       request: "请求",
       response: "响应",
+      diff: "差异",
     },
     started: "开始时间",
     duration: "耗时",
@@ -153,6 +155,8 @@ export const zhCN: Dictionary = {
       "已识别为 OpenAI 请求。完整结构化视图即将上线，目前可在右侧「请求 / 响应」标签及上方的 token / 成本查看。",
     responsesPending:
       "已识别为 OpenAI Responses（Codex）请求。完整结构化视图即将上线，目前可在右侧「请求 / 响应」标签及上方的 token / 成本查看。",
+    bpAdd: "在此端点设置断点",
+    bpRemove: "移除此端点的断点",
   },
   settings: {
     title: "设置",
@@ -208,6 +212,7 @@ export const zhCN: Dictionary = {
     notListening: "未连接 —— 点击「连接」启动代理",
     tokens: "{total} tok",
     cached: "命中缓存 {pct}%",
+    cost: "{cost}",
     sseDisconnected: "已断开",
     sseReconnecting: "重连中…",
     paused: "{count} 个已暂停",
@@ -239,6 +244,7 @@ export const zhCN: Dictionary = {
     allModels: "所有模型",
     clear: "清空筛选",
     visible: "可见 {visible} / {total}",
+    textChipTitle: '文本过滤：“{text}” —— 点击清除',
   },
   centerView: {
     timeline: "时间线",
@@ -261,6 +267,14 @@ export const zhCN: Dictionary = {
     running: "正在发送…",
     failed: "重放失败：{error}",
     failedGeneric: "重放失败。",
+  },
+  diff: {
+    noOrigin: "没有可对比的原始请求——这条不是重放产生的。",
+    loading: "正在加载原始请求…",
+    original: "原始 · {id}",
+    replay: "重放 · {id}",
+    vs: "对比",
+    truncated: "Body 已截断——每侧仅对比前 200 KB。",
   },
   bottom: {
     tabs: {

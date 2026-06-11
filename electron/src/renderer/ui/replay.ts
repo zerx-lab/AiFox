@@ -2,10 +2,17 @@
 // overrides applied. The new entry will arrive via the SSE stream and the
 // sidebar will tag it with "↩ replay of <id>".
 
-import { replayEntry } from "./api-service";
 import { t } from "../i18n";
+import { replayEntry } from "./api-service";
 import { h } from "./dom";
-import { getState, selectedFull, setReplayOpen, setState, type TrafficEntry } from "./state";
+import {
+  getState,
+  recordReplay,
+  selectedFull,
+  setReplayOpen,
+  setState,
+  type TrafficEntry,
+} from "./state";
 
 interface Draft {
   model: string;
@@ -75,9 +82,11 @@ export function renderReplayPopover(): HTMLElement | null {
               return;
             }
             setReplayOpen(false);
-            // Pre-select the freshly issued entry so the user sees the
+            // Record the lineage so the new entry's Diff tab can pair it with
+            // the original (§4.1.5), then pre-select it so the user sees the
             // result immediately instead of having to find it in the list.
-            setState({ selectedId: res.data.entryId });
+            recordReplay(entry.id, res.data.entryId);
+            setState({ selectedId: res.data.entryId, detailTab: "diff" });
           },
         },
         t("replay.run"),

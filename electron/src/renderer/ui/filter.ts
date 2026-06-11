@@ -26,12 +26,29 @@ export function renderFilterPills(): HTMLElement {
     menuClassName: "filter-model-menu",
   });
 
+  // The free-text query lives in the sidebar's search box (the primary input).
+  // Here we surface it as a read-only chip with its own × so the user can see
+  // and clear an active text filter from the center bar too — without a second
+  // mirrored input box that confusingly echoes the sidebar one (§4.1.4).
+  const textChip = state.filters.text
+    ? h(
+        "button.filter-pill.filter-text-chip",
+        {
+          title: t("filter.textChipTitle", { text: state.filters.text }),
+          onclick: () => setFilters({ text: "" }),
+        },
+        h("span.filter-text-chip-q", null, `"${state.filters.text}"`),
+        h("span.filter-text-chip-x", null, "×"),
+      )
+    : null;
+
   return h(
     "div.filter-bar",
     null,
     togglePill("streaming", t("filter.streaming"), state.filters.streaming),
     togglePill("errors", t("filter.errors"), state.filters.errors),
     modelSelect,
+    textChip,
     state.filters.streaming || state.filters.errors || state.filters.model || state.filters.text
       ? h(
           "button.filter-pill.filter-clear",

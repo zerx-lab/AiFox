@@ -45,7 +45,7 @@ export function renderBottomPane(): HTMLElement {
     ),
     h(
       "div.bottom-tabs",
-      null,
+      { role: "tablist" },
       tabBtn("console", t("bottom.tabs.console"), tab),
       tabBtn("variables", t("bottom.tabs.variables"), tab),
       tabBtn("problems", t("bottom.tabs.problems"), tab, counts > 0 ? counts : undefined),
@@ -96,21 +96,47 @@ export function renderBottomPane(): HTMLElement {
   return wrap;
 }
 
+// Order of the bottom-pane tabs — single source for arrow-key navigation.
+const BOTTOM_TAB_ORDER: BottomTab[] = ["console", "variables", "problems", "breakpoints"];
+
 function tabBtn(
   tab: BottomTab,
   label: string,
   active: BottomTab,
   badge?: number,
 ): HTMLElement {
+  const isActive = active === tab;
   return h(
     "button",
     {
-      class: `bottom-tab${active === tab ? " active" : ""}`,
+      class: `bottom-tab${isActive ? " active" : ""}`,
+      role: "tab",
+      "aria-selected": isActive ? "true" : "false",
+      tabindex: isActive ? "0" : "-1",
       onclick: () => setBottomTab(tab),
+      onkeydown: (e: KeyboardEvent) => onTabKey(e, tab),
     },
     label,
     badge !== undefined ? h("span.bottom-badge", null, String(badge)) : null,
   );
+}
+
+// Roving-tabindex arrow navigation across the bottom-pane tablist (§4.1.6).
+function onTabKey(e: KeyboardEvent, tab: BottomTab) {
+  const idx = BOTTOM_TAB_ORDER.indexOf(tab);
+  let next: BottomTab | undefined;
+  if (e.key === "ArrowRight" || e.key === "ArrowDown")
+    next = BOTTOM_TAB_ORDER[(idx + 1) % BOTTOM_TAB_ORDER.length];
+  else if (e.key === "ArrowLeft" || e.key === "ArrowUp")
+    next = BOTTOM_TAB_ORDER[(idx - 1 + BOTTOM_TAB_ORDER.length) % BOTTOM_TAB_ORDER.length];
+  else if (e.key === "Home") next = BOTTOM_TAB_ORDER[0];
+  else if (e.key === "End") next = BOTTOM_TAB_ORDER[BOTTOM_TAB_ORDER.length - 1];
+  if (!next) return;
+  e.preventDefault();
+  setBottomTab(next);
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLElement>('.bottom-tabs button[aria-selected="true"]')?.focus();
+  });
 }
 
 function renderTabBody(tab: BottomTab): HTMLElement {

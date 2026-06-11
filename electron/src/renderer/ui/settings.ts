@@ -2,8 +2,8 @@
 // whole SettingsBody back to /v1/settings, applies theme/language locally,
 // and refreshes the proxy info chip.
 
-import { getProxyInfo, putSettings } from "./api-service";
 import { setLanguage, supportedLanguages, t } from "../i18n";
+import { getProxyInfo, putSettings } from "./api-service";
 import { h } from "./dom";
 import { customSelect } from "./select";
 import { getState, type HeaderKV, type Settings, setState } from "./state";

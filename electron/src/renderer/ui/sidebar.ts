@@ -5,8 +5,9 @@
 // Filters apply to the entry layer; a session that ends up with zero
 // matching entries is hidden until the filter clears.
 
-import { clearTraffic, renameSession } from "./api-service";
 import { t } from "../i18n";
+import { clearTraffic, renameSession } from "./api-service";
+import { registerDispose } from "./app";
 import { colResizeHandle } from "./col-resize";
 import { h } from "./dom";
 import { fmtDuration, fmtSessionStamp, fmtTime, statusKind } from "./format";
@@ -24,6 +25,11 @@ import {
   toggleSessionExpanded,
 } from "./state";
 
+// Debounce window for the free-text filter (§4.1.4): typing fires setFilters at
+// most once per FILTER_DEBOUNCE_MS so a fast typist doesn't trigger a re-filter
+// (and a sidebar rebuild) on every keystroke. The 500-entry list stays smooth.
+const FILTER_DEBOUNCE_MS = 150;
+
 export function renderSidebar(): HTMLElement {
   const state = getState();
   const filtered = applyFilter(state.entries, state.filters);
@@ -32,8 +38,46 @@ export function renderSidebar(): HTMLElement {
     type: "text",
     placeholder: t("sidebar.filterPlaceholder"),
     value: state.filters.text,
-    oninput: (e: Event) => setFilters({ text: (e.target as HTMLInputElement).value }),
+    "aria-label": t("sidebar.filterPlaceholder"),
   }) as HTMLInputElement;
+
+  let debounce: number | null = null;
+  filterInput.addEventListener("input", () => {
+    if (debounce !== null) window.clearTimeout(debounce);
+    debounce = window.setTimeout(() => {
+      debounce = null;
+      setFilters({ text: filterInput.value });
+    }, FILTER_DEBOUNCE_MS);
+  });
+
+  // The clear (×) button only appears once there's text to clear (mirrors the
+  // LLMFox sidebar affordance). Clearing flushes any pending debounce.
+  const clearBtn = state.filters.text
+    ? h(
+        "button.side-filter-clear",
+        {
+          type: "button",
+          title: t("sidebar.filterClear"),
+          "aria-label": t("sidebar.filterClear"),
+          onclick: () => {
+            if (debounce !== null) {
+              window.clearTimeout(debounce);
+              debounce = null;
+            }
+            setFilters({ text: "" });
+          },
+        },
+        clearIcon(),
+      )
+    : null;
+
+  const filterBox = h(
+    "div.side-filter",
+    null,
+    searchIcon(),
+    filterInput,
+    clearBtn,
+  );
 
   const head = h(
     "div.side-head",
@@ -42,7 +86,7 @@ export function renderSidebar(): HTMLElement {
     h("span.count", null, `${filtered.length} / ${state.entries.length}`),
   );
 
-  const list = h("div.side-list");
+  const list = h("div.side-list", { role: "listbox", tabindex: "0" }) as HTMLElement;
   if (filtered.length === 0) {
     list.appendChild(
       h(
@@ -53,7 +97,8 @@ export function renderSidebar(): HTMLElement {
       ),
     );
   } else {
-    appendSessionList(list, state.sessions, filtered);
+    const rows = buildRows(state.sessions, filtered);
+    mountVirtualList(list, rows);
   }
 
   const actions = h(
@@ -75,27 +120,63 @@ export function renderSidebar(): HTMLElement {
     "div.sidebar",
     null,
     head,
-    h("div.side-filter", null, filterInput),
+    filterBox,
     actions,
     list,
     colResizeHandle("left"),
   );
 }
 
-function appendSessionList(
-  root: HTMLElement,
-  sessions: SessionSummary[],
-  filtered: EntryMeta[],
-) {
-  const state = getState();
+function searchIcon(): SVGElement {
+  return svgIcon(
+    '<circle cx="6" cy="6" r="4.2" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M9.2 9.2 L13 13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+    14,
+    "side-filter-icon",
+  );
+}
 
-  // Build a fast lookup: visible entries by sessionId; ones without any
-  // session land in the "unsessioned" bucket.
+function clearIcon(): SVGElement {
+  return svgIcon(
+    '<path d="M3 3 L9 9 M9 3 L3 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+    12,
+    "side-filter-clear-icon",
+  );
+}
+
+function svgIcon(inner: string, size: number, cls: string): SVGElement {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" class="${cls}" aria-hidden="true">${inner}</svg>`;
+  return wrap.firstElementChild as SVGElement;
+}
+
+// ---- Flat row model + virtualization (§4.1.3) -------------------------------
+//
+// The tree (session headers + nested entry rows + the unsessioned bucket) is
+// flattened into a single fixed-height row list so the list can be windowed:
+// only the rows intersecting the viewport (plus an overscan margin) are built
+// into the DOM, with a top/bottom spacer reserving the rest of the scroll
+// height. A long session (hundreds of turns) no longer maps the whole list to
+// DOM on every rebuild. Fixed per-kind heights keep offset math exact and let
+// pin-to-top / scroll-restore in app.ts keep working (it just reads scrollTop).
+
+type Row =
+  | { kind: "session-header"; height: number; session: SessionSummary; count: number; in: number; out: number }
+  | { kind: "raw-header"; height: number; key: string; label: string; count: number; collapsed: boolean }
+  | { kind: "entry"; height: number; entry: EntryMeta };
+
+// Fixed row heights (px) — must match the CSS so the spacer math is exact.
+const H_ENTRY = 46;
+const H_SESSION_HEADER = 28;
+const H_RAW_HEADER = 26;
+// Extra rows rendered above/below the viewport so fast scrolling doesn't flash
+// blank rows before the scroll handler catches up.
+const OVERSCAN = 6;
+
+function buildRows(sessions: SessionSummary[], filtered: EntryMeta[]): Row[] {
+  const state = getState();
   const visibleIds = new Set(filtered.map((e) => e.id));
   const bySession = new Map<string, EntryMeta[]>();
-  const unsessioned: EntryMeta[] = [];
 
-  // First, fold known sessions in.
   for (const s of sessions) {
     const visible: EntryMeta[] = [];
     for (const id of s.entryIds ?? []) {
@@ -106,36 +187,170 @@ function appendSessionList(
     if (visible.length > 0) bySession.set(s.id, visible);
   }
 
-  // Anything that didn't show up under a known session lands in unsessioned.
   const sessionedIds = new Set<string>();
   for (const arr of bySession.values()) for (const e of arr) sessionedIds.add(e.id);
-  for (const e of filtered) if (!sessionedIds.has(e.id)) unsessioned.push(e);
+  const unsessioned = filtered.filter((e) => !sessionedIds.has(e.id));
 
-  // Sessions newest first (matches API List).
+  const rows: Row[] = [];
   for (const s of sessions) {
     const entries = bySession.get(s.id);
     if (!entries || entries.length === 0) continue;
-    root.appendChild(renderSessionGroup(s, entries));
+    const totalIn = (s.inputTokens ?? 0) + (s.cacheRead ?? 0) + (s.cacheCreate ?? 0);
+    rows.push({
+      kind: "session-header",
+      height: H_SESSION_HEADER,
+      session: s,
+      count: entries.length,
+      in: totalIn,
+      out: s.outputTokens ?? 0,
+    });
+    if (state.expandedSessions.has(s.id)) {
+      for (const e of entries) rows.push({ kind: "entry", height: H_ENTRY, entry: e });
+    }
   }
 
   if (unsessioned.length > 0) {
-    root.appendChild(
-      renderRawGroup(
-        "unsessioned",
-        t("sidebar.unsessioned"),
-        unsessioned,
-      ),
-    );
+    const collapsed = state.collapsedGroups.has("unsessioned");
+    rows.push({
+      kind: "raw-header",
+      height: H_RAW_HEADER,
+      key: "unsessioned",
+      label: t("sidebar.unsessioned"),
+      count: unsessioned.length,
+      collapsed,
+    });
+    if (!collapsed) {
+      for (const e of unsessioned) rows.push({ kind: "entry", height: H_ENTRY, entry: e });
+    }
   }
+  return rows;
 }
 
-function renderSessionGroup(s: SessionSummary, entries: EntryMeta[]): HTMLElement {
+// mountVirtualList wires a windowed renderer onto the scroll container. It keeps
+// a spacer (total height) and renders only the visible row window into an
+// absolutely-positioned layer offset by the first visible row's top. A scroll
+// listener re-renders the window; registerDispose removes it when the sidebar
+// region is rebuilt (§4.3.3 dispose protocol).
+function mountVirtualList(viewport: HTMLElement, rows: Row[]) {
+  const offsets: number[] = new Array(rows.length + 1);
+  offsets[0] = 0;
+  for (let i = 0; i < rows.length; i++) offsets[i + 1] = offsets[i]! + rows[i]!.height;
+  const totalHeight = offsets[rows.length]!;
+
+  // Cache built row elements by a stable identity so a re-window (scroll) reuses
+  // already-built rows instead of rebuilding — keeps focus/highlight stable.
+  const layer = h("div.side-vlist-layer") as HTMLElement;
+  const spacer = h("div.side-vlist-spacer") as HTMLElement;
+  spacer.style.height = `${totalHeight}px`;
+  spacer.appendChild(layer);
+  viewport.appendChild(spacer);
+
+  let renderedStart = -1;
+  let renderedEnd = -1;
+
+  const render = () => {
+    const scrollTop = viewport.scrollTop;
+    const viewH = viewport.clientHeight || 400;
+    let start = lowerBound(offsets, scrollTop) - 1;
+    if (start < 0) start = 0;
+    let end = lowerBound(offsets, scrollTop + viewH);
+    if (end > rows.length) end = rows.length;
+    start = Math.max(0, start - OVERSCAN);
+    end = Math.min(rows.length, end + OVERSCAN);
+    if (start === renderedStart && end === renderedEnd) return;
+    renderedStart = start;
+    renderedEnd = end;
+    layer.replaceChildren();
+    layer.style.transform = `translateY(${offsets[start]!}px)`;
+    for (let i = start; i < end; i++) {
+      const el = buildRowEl(rows[i]!);
+      el.style.height = `${rows[i]!.height}px`;
+      layer.appendChild(el);
+    }
+  };
+
+  viewport.addEventListener("scroll", render, { passive: true });
+  registerDispose(viewport, () => viewport.removeEventListener("scroll", render));
+  // Initial paint. clientHeight may be 0 before layout, so also schedule a
+  // post-layout pass via rAF to fill the real viewport.
+  render();
+  requestAnimationFrame(render);
+
+  // Keyboard navigation (§4.1.6): the listbox responds to Up/Down to move the
+  // selection across ENTRY rows (headers are skipped), scrolling the new row
+  // into view (which triggers the windowed render).
+  viewport.addEventListener("keydown", (e) => onListKey(e, rows, viewport));
+}
+
+// lowerBound: first index i where offsets[i] > value (offsets is ascending).
+function lowerBound(offsets: number[], value: number): number {
+  let lo = 0;
+  let hi = offsets.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (offsets[mid]! <= value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function buildRowEl(row: Row): HTMLElement {
+  if (row.kind === "session-header") {
+    return renderSessionHeaderRow(row.session, row.count, row.in, row.out);
+  }
+  if (row.kind === "raw-header") {
+    return renderRawHeaderRow(row.key, row.label, row.count, row.collapsed);
+  }
+  return entryRow(row.entry);
+}
+
+function onListKey(e: KeyboardEvent, rows: Row[], viewport: HTMLElement) {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") {
+    return;
+  }
+  e.preventDefault();
+  // Index list of entry rows in display order.
+  const entryRows = rows.filter((r): r is Extract<Row, { kind: "entry" }> => r.kind === "entry");
+  if (entryRows.length === 0) return;
+  const selectedId = getState().selectedId;
+  const cur = entryRows.findIndex((r) => r.entry.id === selectedId);
+  let next = cur;
+  if (e.key === "ArrowDown") next = cur < entryRows.length - 1 ? cur + 1 : cur < 0 ? 0 : cur;
+  else if (e.key === "ArrowUp") next = cur > 0 ? cur - 1 : 0;
+  else if (e.key === "Home") next = 0;
+  else if (e.key === "End") next = entryRows.length - 1;
+  const target = entryRows[next];
+  if (!target) return;
+  setState({ selectedId: target.entry.id });
+  // Scroll the row into view; the windowed render fills it in. Compute its
+  // absolute offset from the flat row order.
+  const flatIdx = rows.indexOf(target);
+  scrollRowIntoView(viewport, rows, flatIdx);
+}
+
+function scrollRowIntoView(viewport: HTMLElement, rows: Row[], idx: number) {
+  let top = 0;
+  for (let i = 0; i < idx; i++) top += rows[i]!.height;
+  const bottom = top + rows[idx]!.height;
+  const viewTop = viewport.scrollTop;
+  const viewBottom = viewTop + viewport.clientHeight;
+  if (top < viewTop) viewport.scrollTop = top;
+  else if (bottom > viewBottom) viewport.scrollTop = bottom - viewport.clientHeight;
+}
+
+// renderSessionHeaderRow builds just the session header (the nested entry rows
+// are now separate flat rows in the virtual list). Wrapped in .tree-group so the
+// existing header CSS applies; height is fixed by the virtualizer.
+function renderSessionHeaderRow(
+  s: SessionSummary,
+  count: number,
+  totalIn: number,
+  totalOut: number,
+): HTMLElement {
   const state = getState();
   const expanded = state.expandedSessions.has(s.id);
   const active = state.selectedSessionId === s.id;
   const renaming = state.renamingSessionId === s.id;
-  const totalIn = (s.inputTokens ?? 0) + (s.cacheRead ?? 0) + (s.cacheCreate ?? 0);
-  const totalOut = s.outputTokens ?? 0;
   const defaultLabel = fmtSessionStamp(s.startedAt);
   const label = s.name || defaultLabel;
   const modelHint = s.model || s.provider || "";
@@ -180,40 +395,22 @@ function renderSessionGroup(s: SessionSummary, entries: EntryMeta[]): HTMLElemen
   const header = h(
     `div.tree-group-hdr${active ? ".active" : ""}`,
     {
+      role: "group",
+      "aria-expanded": expanded ? "true" : "false",
       onclick: () => {
         if (renaming) return;
         selectSession(s.id);
       },
     },
     chev,
-    h(
-      `span.session-dot.${statusDot(s)}`,
-      null,
-    ),
+    h(`span.session-dot.${statusDot(s)}`, null),
     labelNode,
     modelLabel(s) ? h("span.tree-group-model", { title: modelHint }, modelLabel(s)) : null,
     renameBtn,
-    h(
-      "span.tree-group-meta",
-      null,
-      `${entries.length} · ${fmtTok(totalIn)}/${fmtTok(totalOut)}`,
-    ),
+    h("span.tree-group-meta", null, `${count} · ${fmtTok(totalIn)}/${fmtTok(totalOut)}`),
   );
 
-  const items = expanded
-    ? h(
-        "div.tree-group-items",
-        null,
-        ...entries.map((e) => entryRow(e)),
-      )
-    : null;
-
-  return h(
-    `div.tree-group${expanded ? "" : ".collapsed"}`,
-    null,
-    header,
-    items,
-  );
+  return h("div.tree-group.side-vrow", null, header);
 }
 
 function renameInput(s: SessionSummary, initial: string): HTMLInputElement {
@@ -262,22 +459,26 @@ function renameInput(s: SessionSummary, initial: string): HTMLInputElement {
   return input;
 }
 
-function renderRawGroup(key: string, label: string, entries: EntryMeta[]): HTMLElement {
-  const state = getState();
-  const collapsed = state.collapsedGroups.has(key);
+function renderRawHeaderRow(
+  key: string,
+  label: string,
+  count: number,
+  collapsed: boolean,
+): HTMLElement {
   return h(
-    `div.tree-group${collapsed ? ".collapsed" : ""}`,
+    "div.tree-group.side-vrow",
     null,
     h(
       "div.tree-group-hdr",
-      { onclick: () => toggleGroupCollapsed(key) },
+      {
+        role: "group",
+        "aria-expanded": collapsed ? "false" : "true",
+        onclick: () => toggleGroupCollapsed(key),
+      },
       h("span.chev", null, collapsed ? "▸" : "▾"),
       h("span.tree-group-label", null, label),
-      h("span.tree-group-meta", null, String(entries.length)),
+      h("span.tree-group-meta", null, String(count)),
     ),
-    collapsed
-      ? null
-      : h("div.tree-group-items", null, ...entries.map((e) => entryRow(e))),
   );
 }
 
@@ -306,7 +507,9 @@ function entryRow(entry: EntryMeta): HTMLElement {
   return h(
     "div",
     {
-      class: `entry${active ? " active" : ""}`,
+      class: `entry side-vrow${active ? " active" : ""}`,
+      role: "option",
+      "aria-selected": active ? "true" : "false",
       onclick: () => setState({ selectedId: entry.id }),
     },
     h("span", { class: `badge ${kind}` }, badgeLabel),

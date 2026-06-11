@@ -37,7 +37,8 @@ export const en = {
     empty: "No requests captured yet.",
     emptyHint:
       "Point your AI client at the proxy URL above and send a request.",
-    filterPlaceholder: "Filter by path or status",
+    filterPlaceholder: "Filter by path, status, or model…",
+    filterClear: "Clear filter",
     clear: "Clear all",
     confirmClear: "Discard all captured traffic?",
     unsessioned: "Other endpoints",
@@ -55,6 +56,7 @@ export const en = {
       headers: "Headers",
       request: "Request",
       response: "Response",
+      diff: "Diff",
     },
     started: "Started",
     duration: "Duration",
@@ -154,6 +156,8 @@ export const en = {
       "OpenAI request recognized. The full structured view is coming soon — see Request / Response tabs and token/cost above.",
     responsesPending:
       "OpenAI Responses (Codex) request recognized. The full structured view is coming soon — see Request / Response tabs and token/cost above.",
+    bpAdd: "Set breakpoint on this endpoint",
+    bpRemove: "Remove breakpoint on this endpoint",
   },
   settings: {
     title: "Settings",
@@ -209,6 +213,7 @@ export const en = {
     notListening: "Disconnected — press Connect to start the proxy",
     tokens: "{total} tok",
     cached: "{pct}% cached",
+    cost: "{cost}",
     sseDisconnected: "Disconnected",
     sseReconnecting: "Reconnecting…",
     paused: "{count} paused",
@@ -240,6 +245,7 @@ export const en = {
     allModels: "all models",
     clear: "clear filters",
     visible: "{visible} / {total} visible",
+    textChipTitle: 'Text filter: "{text}" — click to clear',
   },
   centerView: {
     timeline: "Timeline",
@@ -262,6 +268,14 @@ export const en = {
     running: "Issuing replay…",
     failed: "Replay failed: {error}",
     failedGeneric: "Replay failed.",
+  },
+  diff: {
+    noOrigin: "No original entry to compare — this entry wasn't produced by a replay.",
+    loading: "Loading original entry…",
+    original: "original · {id}",
+    replay: "replay · {id}",
+    vs: "vs",
+    truncated: "Body truncated — diff limited to the first 200 KB per side.",
   },
   bottom: {
     tabs: {

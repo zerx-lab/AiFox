@@ -61,7 +61,10 @@ export function customSelect(opts: SelectOpts): HTMLElement {
     role: "listbox",
     "aria-hidden": "true",
   });
-  for (const opt of opts.options) {
+  // Item elements in option order, so arrow-key navigation can move a visual
+  // "active" highlight without committing the selection until Enter (§4.1.6).
+  const items: HTMLElement[] = [];
+  opts.options.forEach((opt) => {
     const selected = opt.value === opts.value;
     const item = h(
       "button",
@@ -80,9 +83,22 @@ export function customSelect(opts: SelectOpts): HTMLElement {
       h("span.cselect-label", null, opt.label),
       selected ? checkMark() : null,
     );
+    items.push(item);
     menu.appendChild(item);
-  }
+  });
   root.appendChild(menu);
+
+  // active is the keyboard-highlighted index while the menu is open (-1 = none).
+  let active = -1;
+  const setActive = (i: number) => {
+    if (items[active]) items[active]!.classList.remove("active");
+    active = i;
+    const el = items[active];
+    if (el) {
+      el.classList.add("active");
+      el.scrollIntoView({ block: "nearest" });
+    }
+  };
 
   let open = false;
   let docCtrl: AbortController | null = null;
@@ -119,9 +135,44 @@ export function customSelect(opts: SelectOpts): HTMLElement {
       open = false;
       return;
     }
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      close();
+    if (!open) return;
+    switch (e.key) {
+      case "Escape":
+        e.stopPropagation();
+        close();
+        trigger.focus();
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        e.stopPropagation();
+        setActive(active < items.length - 1 ? active + 1 : 0);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        e.stopPropagation();
+        setActive(active > 0 ? active - 1 : items.length - 1);
+        break;
+      case "Home":
+        e.preventDefault();
+        e.stopPropagation();
+        setActive(0);
+        break;
+      case "End":
+        e.preventDefault();
+        e.stopPropagation();
+        setActive(items.length - 1);
+        break;
+      case "Enter":
+      case " ": {
+        if (active < 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const opt = opts.options[active];
+        close();
+        trigger.focus();
+        if (opt) void opts.onChange(opt.value);
+        break;
+      }
     }
   };
 
@@ -132,6 +183,10 @@ export function customSelect(opts: SelectOpts): HTMLElement {
     trigger.setAttribute("aria-expanded", v ? "true" : "false");
     menu.setAttribute("aria-hidden", v ? "false" : "true");
     if (v) {
+      // Highlight the currently-selected option (or the first) on open so arrow
+      // keys have a sensible starting point.
+      const selIdx = opts.options.findIndex((o) => o.value === opts.value);
+      setActive(selIdx >= 0 ? selIdx : 0);
       // Each open creates a fresh AbortController so multiple instances never
       // share signal state and cleanup is always paired with an open.
       docCtrl = new AbortController();
@@ -139,6 +194,8 @@ export function customSelect(opts: SelectOpts): HTMLElement {
       document.addEventListener("mousedown", onDocMouseDown, { capture: true, signal });
       document.addEventListener("keydown", onKey, { capture: true, signal });
     } else {
+      if (items[active]) items[active]!.classList.remove("active");
+      active = -1;
       docCtrl?.abort();
       docCtrl = null;
     }

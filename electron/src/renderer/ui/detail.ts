@@ -7,12 +7,14 @@ import type { components } from "../../api/client";
 import { t } from "../i18n";
 import { renderCache } from "./cache";
 import { colResizeHandle } from "./col-resize";
+import { renderDiff } from "./diff";
 import { h } from "./dom";
 import { fmtBytes, fmtClock, fmtDuration, isPending } from "./format";
 import { renderRawRequest, renderRawResponse } from "./raw-http";
 import {
   type DetailTab,
   getState,
+  replayOriginOf,
   type SessionSummary,
   selectedFull,
   setDetailTab,
@@ -63,19 +65,30 @@ export function renderDetail(): HTMLElement {
       null,
       colResizeHandle("right"),
       detailHead(meta),
-      detailTabs("overview", meta.hasStructured),
+      detailTabs(skeletonTabs(meta.hasStructured), "overview"),
       h("div.detail-body", null, h("div.detail-loading", null, t("detail.loading"))),
     );
   }
 
-  const analysis = entry.analysis as Analysis | undefined;
-  const hasAnthropic = !!analysis?.anthropic;
-
-  // Tabs are dynamic: cache/tokens/tools only show up if we actually have
-  // structured data; otherwise the user sees the raw side only.
+  // Single source of truth for which tabs exist for this entry. The fallback
+  // (a stale tab no longer available) and the body dispatch both read this one
+  // table, so they can never drift (§ task 7).
+  const tabs = availableTabs(entry);
   let tab: DetailTab = state.detailTab;
-  if (!hasAnthropic && (tab === "cache" || tab === "tokens" || tab === "tools")) {
-    tab = "overview";
+  if (!tabs.some((d) => d.tab === tab)) tab = "overview";
+
+  // When the timeline selection (message/tool) changes, reset the detail body
+  // scroll to the top so the user lands at the start of the newly-inspected
+  // content rather than wherever the previous entry was scrolled (§ task 5).
+  // reconcileDetail otherwise preserves scrollTop across in-place body refreshes
+  // (e.g. streaming bumps), so we only force a reset on an actual selection flip.
+  const selKey = `${state.selectedId}|${state.selection.messageKey}|${state.selection.toolUseId}`;
+  if (selKey !== lastSelKey) {
+    lastSelKey = selKey;
+    requestAnimationFrame(() => {
+      const body = document.querySelector<HTMLElement>(".detail-body");
+      if (body) body.scrollTop = 0;
+    });
   }
 
   return h(
@@ -83,9 +96,69 @@ export function renderDetail(): HTMLElement {
     null,
     colResizeHandle("right"),
     detailHead(entry),
-    detailTabs(tab, hasAnthropic),
+    detailTabs(tabs, tab),
     h("div.detail-body", null, renderTabBody(entry, tab)),
   );
+}
+
+// Tracks the last timeline-selection key so renderDetail can reset the body
+// scroll only on a genuine selection change, not on every re-render.
+let lastSelKey = "";
+
+interface TabDef {
+  tab: DetailTab;
+  label: string;
+  body: (entry: TrafficEntry) => HTMLElement;
+}
+
+// availableTabs returns the ordered tab set for an entry: always overview /
+// headers / request / response, plus cache/tokens/tools when an Anthropic
+// analysis is present, plus a Diff tab when the entry was produced by a replay.
+function availableTabs(entry: TrafficEntry): TabDef[] {
+  const analysis = entry.analysis as Analysis | undefined;
+  const hasAnthropic = !!analysis?.anthropic;
+  const defs: TabDef[] = [
+    { tab: "overview", label: t("detail.tabs.overview"), body: overviewBody },
+  ];
+  if (hasAnthropic) {
+    defs.push({ tab: "cache", label: t("detail.tabs.cache"), body: (e) => renderCache((e.analysis as Analysis | undefined)?.anthropic) });
+    defs.push({ tab: "tokens", label: t("detail.tabs.tokens"), body: tokensBody });
+    defs.push({ tab: "tools", label: t("detail.tabs.tools"), body: renderTools });
+  }
+  if (replayOriginOf(entry.id)) {
+    defs.push({ tab: "diff", label: t("detail.tabs.diff"), body: renderDiff });
+  }
+  defs.push({ tab: "headers", label: t("detail.tabs.headers"), body: headersBody });
+  defs.push({ tab: "request", label: t("detail.tabs.request"), body: renderRawRequest });
+  defs.push({ tab: "response", label: t("detail.tabs.response"), body: renderRawResponse });
+  return defs;
+}
+
+// skeletonTabs mirrors the loaded tab order for the loading placeholder, using
+// only the hasStructured hint from the EntryMeta (no full body yet). Diff/raw
+// resolve once the entry loads. Body builders are unused in the skeleton.
+function skeletonTabs(hasStructured: boolean): TabDef[] {
+  const noop = () => h("div");
+  const defs: TabDef[] = [{ tab: "overview", label: t("detail.tabs.overview"), body: noop }];
+  if (hasStructured) {
+    defs.push({ tab: "cache", label: t("detail.tabs.cache"), body: noop });
+    defs.push({ tab: "tokens", label: t("detail.tabs.tokens"), body: noop });
+    defs.push({ tab: "tools", label: t("detail.tabs.tools"), body: noop });
+  }
+  defs.push({ tab: "headers", label: t("detail.tabs.headers"), body: noop });
+  defs.push({ tab: "request", label: t("detail.tabs.request"), body: noop });
+  defs.push({ tab: "response", label: t("detail.tabs.response"), body: noop });
+  return defs;
+}
+
+function tokensBody(entry: TrafficEntry): HTMLElement {
+  const analysis = entry.analysis as Analysis | undefined;
+  const usage = analysis?.anthropic?.response?.usage as AnthropicUsage | undefined;
+  const model =
+    analysis?.anthropic?.request?.model ||
+    analysis?.anthropic?.response?.model ||
+    undefined;
+  return renderTokens(usage, model);
 }
 
 function detailHead(entry: DetailHeadFields): HTMLElement {
@@ -118,55 +191,62 @@ function detailHead(entry: DetailHeadFields): HTMLElement {
   );
 }
 
-function detailTabs(tab: DetailTab, hasAnthropic: boolean): HTMLElement {
-  const tabs: HTMLElement[] = [];
-  tabs.push(tabBtn("overview", t("detail.tabs.overview"), tab));
-  if (hasAnthropic) {
-    tabs.push(tabBtn("cache", t("detail.tabs.cache"), tab));
-    tabs.push(tabBtn("tokens", t("detail.tabs.tokens"), tab));
-    tabs.push(tabBtn("tools", t("detail.tabs.tools"), tab));
+// detailTabs renders the tablist. ARIA: role=tablist / tab + roving tabindex +
+// Left/Right arrow navigation (§4.1.6). The active tab is the only tab in the
+// tab order (tabindex 0); arrows move focus AND selection between tabs.
+function detailTabs(defs: TabDef[], active: DetailTab): HTMLElement {
+  const order = defs.map((d) => d.tab);
+  const bar = h("div.detail-tabs", { role: "tablist" });
+  for (const d of defs) {
+    bar.appendChild(tabBtn(d.tab, d.label, active, order));
   }
-  tabs.push(tabBtn("headers", t("detail.tabs.headers"), tab));
-  tabs.push(tabBtn("request", t("detail.tabs.request"), tab));
-  tabs.push(tabBtn("response", t("detail.tabs.response"), tab));
-  return h("div.detail-tabs", null, ...tabs);
+  return bar;
 }
 
-function tabBtn(tab: DetailTab, label: string, active: DetailTab): HTMLElement {
+function tabBtn(
+  tab: DetailTab,
+  label: string,
+  active: DetailTab,
+  order: DetailTab[],
+): HTMLElement {
+  const isActive = active === tab;
   return h(
     "button",
     {
-      class: active === tab ? "active" : "",
+      class: isActive ? "active" : "",
+      role: "tab",
+      "aria-selected": isActive ? "true" : "false",
+      tabindex: isActive ? "0" : "-1",
       onclick: () => setDetailTab(tab),
+      onkeydown: (e: KeyboardEvent) => onTabKey(e, tab, order),
     },
     label,
   );
 }
 
+// onTabKey implements roving-tabindex arrow navigation across the tablist.
+function onTabKey(e: KeyboardEvent, tab: DetailTab, order: DetailTab[]) {
+  let next: DetailTab | undefined;
+  const idx = order.indexOf(tab);
+  if (e.key === "ArrowRight" || e.key === "ArrowDown") next = order[(idx + 1) % order.length];
+  else if (e.key === "ArrowLeft" || e.key === "ArrowUp")
+    next = order[(idx - 1 + order.length) % order.length];
+  else if (e.key === "Home") next = order[0];
+  else if (e.key === "End") next = order[order.length - 1];
+  if (!next) return;
+  e.preventDefault();
+  setDetailTab(next);
+  // Move focus to the newly active tab after the region re-renders.
+  requestAnimationFrame(() => {
+    document
+      .querySelector<HTMLElement>(`.detail-tabs button[aria-selected="true"]`)
+      ?.focus();
+  });
+}
+
 function renderTabBody(entry: TrafficEntry, tab: DetailTab): HTMLElement {
-  const analysis = entry.analysis as Analysis | undefined;
-  switch (tab) {
-    case "overview":
-      return overviewBody(entry);
-    case "cache":
-      return renderCache(analysis?.anthropic);
-    case "tokens": {
-      const usage = analysis?.anthropic?.response?.usage as AnthropicUsage | undefined;
-      const model =
-        analysis?.anthropic?.request?.model ||
-        analysis?.anthropic?.response?.model ||
-        undefined;
-      return renderTokens(usage, model);
-    }
-    case "tools":
-      return renderTools(entry);
-    case "headers":
-      return headersBody(entry);
-    case "request":
-      return renderRawRequest(entry);
-    case "response":
-      return renderRawResponse(entry);
-  }
+  const def = availableTabs(entry).find((d) => d.tab === tab);
+  return def ? def.body(entry) : overviewBody(entry);
 }
 
 function overviewBody(entry: TrafficEntry): HTMLElement {

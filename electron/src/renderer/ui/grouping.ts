@@ -19,7 +19,7 @@ export function applyFilter(
   const text = filter.text.trim().toLowerCase();
   return entries.filter((e) => {
     if (text) {
-      const hay = `${e.method} ${e.url} ${e.statusCode}`.toLowerCase();
+      const hay = `${e.method} ${e.url} ${e.statusCode} ${e.model ?? ""}`.toLowerCase();
       if (!hay.includes(text)) return false;
     }
     if (filter.streaming && !e.streaming) return false;

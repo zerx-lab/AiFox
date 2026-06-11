@@ -28,7 +28,8 @@ export type DetailTab =
   | "tools"
   | "headers"
   | "request"
-  | "response";
+  | "response"
+  | "diff";
 
 export type CacheStyle = "segmented" | "heatmap" | "blame";
 
@@ -126,6 +127,9 @@ export interface EntryTotals {
   outputTokens: number;
   cacheRead: number;
   cacheCreate: number;
+  // Cumulative cost estimate (USD) summed from per-entry EntryMeta.cost (§ task
+  // 8). Aggregated incrementally alongside the byte/token counters.
+  cost: number;
 }
 
 function emptyTotals(): EntryTotals {
@@ -136,6 +140,7 @@ function emptyTotals(): EntryTotals {
     outputTokens: 0,
     cacheRead: 0,
     cacheCreate: 0,
+    cost: 0,
   };
 }
 
@@ -146,6 +151,7 @@ function addEntryToTotals(t: EntryTotals, e: EntryMeta, sign: 1 | -1) {
   t.outputTokens += sign * (e.outputTokens ?? 0);
   t.cacheRead += sign * (e.cacheRead ?? 0);
   t.cacheCreate += sign * (e.cacheCreate ?? 0);
+  t.cost += sign * (e.cost ?? 0);
 }
 
 const entryTotals: EntryTotals = emptyTotals();
@@ -586,6 +592,7 @@ export function clearEntries() {
   state.expandedSessions.clear();
   state.expandedMessages.clear();
   state.jsonFold.clear();
+  replayOrigins.clear();
   touch("struct", "sel", "ui", "meta");
 }
 
@@ -606,6 +613,27 @@ export function replaceBreakpoints(items: Breakpoint[], paused: PausedRequest[])
   state.breakpoints = [...items];
   state.pausedRequests = [...paused];
   touch("struct");
+}
+
+// Replay lineage map (§4.1.5): newEntryId → originalEntryId, recorded when a
+// replay is issued so the Diff tab can pair the replayed entry with its source
+// even before the SSE-streamed EntryMeta (which also carries replayedFromId)
+// arrives. Session-scoped: cleared with the traffic. Mutated in place; the Diff
+// tab reads it on render. No version bump needed — the selection change that
+// shows the new entry already bumps `sel`.
+const replayOrigins = new Map<string, string>();
+
+export function recordReplay(originId: string, newId: string) {
+  replayOrigins.set(newId, originId);
+}
+
+// replayOriginOf returns the original entry id a given entry was replayed from,
+// preferring the live map, then the entry's own replayedFromId projection.
+export function replayOriginOf(id: string): string | null {
+  const mapped = replayOrigins.get(id);
+  if (mapped) return mapped;
+  const meta = state.entries.find((e) => e.id === id);
+  return meta?.replayedFromId ?? null;
 }
 
 export function selectSession(id: string | null) {

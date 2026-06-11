@@ -176,6 +176,20 @@ export function deleteBreakpoint(id: string): Promise<boolean> {
   );
 }
 
+// togglePathBreakpoint creates a path breakpoint for `path`, or deletes the
+// existing one if it already matches (used by the timeline rail gutter so the
+// user can set/clear a breakpoint on an entry's endpoint with one click). The
+// caller passes the current breakpoint list so we don't re-fetch.
+export async function togglePathBreakpoint(
+  path: string,
+  existing: Breakpoint[],
+): Promise<boolean> {
+  const match = existing.find((b) => b.match === "path" && b.pattern === path);
+  if (match) return deleteBreakpoint(match.id);
+  const res = await addBreakpoint({ match: "path", pattern: path, enabled: true });
+  return res.ok;
+}
+
 export function continuePaused(entryId: string): Promise<boolean> {
   return runVoid("toast.ctx.continuePaused", (c) =>
     c.POST("/v1/breakpoints/paused/{entryId}/continue", {

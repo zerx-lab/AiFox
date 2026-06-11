@@ -2,6 +2,7 @@
 // affordances to add / enable / disable / delete / continue / abort.
 
 import type { components } from "../../api/client";
+import { t } from "../i18n";
 import {
   abortPaused,
   addBreakpoint,
@@ -9,7 +10,6 @@ import {
   deleteBreakpoint,
   updateBreakpoint,
 } from "./api-service";
-import { t } from "../i18n";
 import { h } from "./dom";
 import { fmtClock } from "./format";
 import { getState, setState } from "./state";
@@ -72,6 +72,21 @@ export function renderBreakpoints(): HTMLElement {
     draft.match = matchSelect.value as "endpoint" | "path";
   });
 
+  const submit = async () => {
+    if (!draft.pattern.trim()) return;
+    const res = await addBreakpoint({
+      match: draft.match,
+      pattern: draft.pattern.trim(),
+      enabled: draft.enabled,
+    });
+    if (!res.ok) return; // service toasted the failure
+    draft.pattern = "";
+    // Trigger re-render; the SSE 'breakpoints' event also updates state,
+    // but the click handler's caller doesn't re-render, so nudge the
+    // 'struct' slice (the breakpoints list lives there).
+    setState({ breakpoints: getState().breakpoints });
+  };
+
   const patternInput = document.createElement("input");
   patternInput.type = "text";
   patternInput.placeholder = t("bp.patternPlaceholder");
@@ -79,23 +94,19 @@ export function renderBreakpoints(): HTMLElement {
   patternInput.addEventListener("input", () => {
     draft.pattern = patternInput.value;
   });
+  // Enter in the pattern field submits the new breakpoint (§4.1.6).
+  patternInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void submit();
+    }
+  });
 
   const addBtn = h(
     "button.btn",
     {
-      onclick: async () => {
-        if (!draft.pattern.trim()) return;
-        const res = await addBreakpoint({
-          match: draft.match,
-          pattern: draft.pattern.trim(),
-          enabled: draft.enabled,
-        });
-        if (!res.ok) return; // service toasted the failure
-        draft.pattern = "";
-        // Trigger re-render; the SSE 'breakpoints' event also updates state,
-        // but the click handler's caller doesn't re-render, so nudge the
-        // 'struct' slice (the breakpoints list lives there).
-        setState({ breakpoints: getState().breakpoints });
+      onclick: () => {
+        void submit();
       },
     },
     t("bp.add"),

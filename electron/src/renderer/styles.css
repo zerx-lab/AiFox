@@ -550,6 +550,45 @@ body.col-resizing {
 .side-filter input::placeholder {
   color: var(--fg-4);
 }
+.side-filter-icon {
+  flex: 0 0 auto;
+  color: var(--fg-4);
+}
+.side-filter-clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  color: var(--fg-4);
+  cursor: pointer;
+}
+.side-filter-clear:hover {
+  color: var(--fg);
+}
+
+/* Read-only text-filter chip in the center filter bar (mirrors the sidebar
+   search box value without a second editable input). */
+.filter-text-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+}
+.filter-text-chip-q {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.filter-text-chip-x {
+  color: var(--fg-3);
+}
+.filter-text-chip:hover .filter-text-chip-x {
+  color: var(--fg);
+}
 .side-actions {
   display: flex;
   gap: 6px;
@@ -573,6 +612,33 @@ body.col-resizing {
   flex: 1;
   overflow-y: auto;
   padding: 4px 6px 12px;
+  position: relative;
+}
+.side-list:focus-visible {
+  outline: none;
+}
+/* Virtualized list (§4.1.3): the spacer reserves the full scroll height; the
+   layer holds only the rendered window, translated to the first visible row. */
+.side-vlist-spacer {
+  position: relative;
+  width: 100%;
+}
+.side-vlist-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+/* Each windowed row occupies its fixed slot height; clip any overflow so a row
+   never bleeds into its neighbour and breaks the offset math. */
+.side-vrow {
+  box-sizing: border-box;
+  overflow: hidden;
+  margin-bottom: 0;
+}
+.side-vrow.entry {
+  align-content: center;
 }
 
 .entry {
@@ -3149,7 +3215,8 @@ body.col-resizing {
   min-width: 140px;
   white-space: nowrap;
 }
-.cselect-item:hover {
+.cselect-item:hover,
+.cselect-item.active {
   background: var(--bg-hover);
 }
 .cselect-item.selected {
@@ -3296,3 +3363,213 @@ body.col-resizing {
   font-size: 12px;
 }
 .bp-del:hover { color: var(--err); }
+
+/* ===== Timeline rail (§4.2) =====
+   Three-column grid per turn: HH:MM:SS timestamp · rail (vertical line + role
+   node + breakpoint gutter) · card. .tl-body is still the flex-column scroll
+   container; each .tl-row is one grid row. */
+.tl-row {
+  display: grid;
+  grid-template-columns: 64px 18px minmax(0, 1fr);
+  position: relative;
+}
+.tl-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-4);
+  padding-top: 11px;
+  text-align: right;
+  padding-right: 10px;
+  white-space: nowrap;
+}
+.tl-rail {
+  position: relative;
+  width: 18px;
+}
+.tl-rail::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 0;
+  bottom: -14px;
+  width: 1px;
+  background: var(--border);
+}
+.tl-row:last-child .tl-rail::before {
+  bottom: 50%;
+}
+.tl-node {
+  position: absolute;
+  left: 4px;
+  top: 13px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bg-elev);
+  border: 2px solid var(--fg-4);
+  z-index: 1;
+}
+.tl-node-user {
+  border-color: var(--user);
+}
+.tl-node-assistant {
+  border-color: var(--accent-deep);
+  background: var(--accent-soft);
+}
+.tl-node-system {
+  border-color: var(--fg-3);
+}
+.tl-node-tools {
+  border-color: var(--tool);
+  border-radius: 2px;
+}
+/* Breakpoint gutter: an invisible click target on the rail. Hover shows a
+   translucent red ring; an active breakpoint paints a solid red dot. */
+.tl-bp-gutter {
+  position: absolute;
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  z-index: 2;
+}
+.tl-bp-gutter:hover::after,
+.tl-bp-gutter.has-bp::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 13px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.tl-bp-gutter:hover::after {
+  background: var(--err-soft);
+}
+.tl-bp-gutter.has-bp::after {
+  background: var(--err);
+}
+.tl-content {
+  min-width: 0;
+}
+
+/* Per-turn usage footer: cache/new/out pills + 4px cache-ratio bar + cost. */
+.tl-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.tl-pill {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.tl-pill.cached {
+  color: var(--ok);
+  border-color: var(--ok-soft);
+  background: var(--ok-soft);
+}
+.tl-pill.new {
+  color: var(--warn);
+}
+.tl-pill.cost {
+  color: var(--fg-2);
+}
+.tl-ratio {
+  flex: 1;
+  min-width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+  overflow: hidden;
+}
+.tl-ratio i {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+}
+
+/* ===== Replay diff view (§4.1.5) ===== */
+.diff-head {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.diff-head .vs {
+  color: var(--fg-4);
+}
+.diff {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: auto;
+}
+.diff-row {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diff-row .sgn {
+  color: var(--fg-4);
+  user-select: none;
+  text-align: center;
+}
+.diff-row.add {
+  background: var(--ok-soft);
+}
+.diff-row.add .sgn,
+.diff-row.add .txt {
+  color: var(--ok);
+}
+.diff-row.del {
+  background: var(--err-soft);
+}
+.diff-row.del .sgn,
+.diff-row.del .txt {
+  color: var(--err);
+}
+.diff-trunc {
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--fg-4);
+}
+.diff-empty {
+  padding: 16px;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+/* json-tree paged "show more" control */
+.jt-more {
+  display: inline-block;
+  margin: 2px 0 2px 16px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--accent-deep);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.jt-more:hover {
+  background: var(--bg-hover);
+}

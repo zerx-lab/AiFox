@@ -3,8 +3,8 @@
 // toggles live in the titlebar (icon-only), so the topbar stays focused on
 // the proxy state — the thing the user actually interacts with constantly.
 
-import { setProxyEnabled } from "./api-service";
 import { t } from "../i18n";
+import { setProxyEnabled } from "./api-service";
 import { h } from "./dom";
 import { getState, setReplayOpen, setState } from "./state";
 

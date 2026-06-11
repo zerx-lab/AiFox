@@ -22,6 +22,10 @@ export function renderStatusbar(): HTMLElement {
   const bytesOut = totals.bytesOut;
   const tokAll =
     totals.inputTokens + totals.cacheRead + totals.cacheCreate + totals.outputTokens;
+  // Global cache hit rate = cache reads / total input-side tokens (§ task 8).
+  const inputAll = totals.inputTokens + totals.cacheRead + totals.cacheCreate;
+  const hitPct = inputAll > 0 ? Math.round((totals.cacheRead / inputAll) * 100) : 0;
+  const cost = totals.cost;
 
   const inSettings = s.view === "settings";
   const settingsBtn = h(
@@ -90,6 +94,12 @@ export function renderStatusbar(): HTMLElement {
           " ",
           t("status.tokens", { total: fmtTok(tokAll) }),
         )
+      : null,
+    inputAll > 0
+      ? h("span", null, "·", " ", t("status.cached", { pct: String(hitPct) }))
+      : null,
+    cost > 0
+      ? h("span", null, "·", " ", t("status.cost", { cost: `$${cost.toFixed(4)}` }))
       : null,
     h("span.spacer"),
     lastError ? h("span.err", null, lastError) : null,

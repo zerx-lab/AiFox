@@ -27,6 +27,10 @@ export interface JsonTreeOpts {
 // thousands) and one collapsible tree per event would be a wall of widgets that
 // is slow to build. The caller surfaces a note when it trips this.
 export const SSE_FOLD_MAX_EVENTS = 200;
+// Containers with more than this many children render in pages: the first
+// PAGE_SIZE children plus a "show more" control that appends the next page
+// (§4.3.5). Keeps a 10k-element array from building 10k DOM rows up front.
+const PAGE_SIZE = 200;
 // Above this many events, each event's `data` payload starts collapsed so the
 // view is a scannable list of event lines rather than a fully-expanded dump.
 const SSE_DATA_COLLAPSE_OVER = 6;
@@ -115,15 +119,21 @@ function buildContainer(
   if (!isLast) hint.appendChild(punct(","));
   hint.appendChild(span(` ${entries.length}`, "jt-count"));
   head.appendChild(hint);
-  head.addEventListener("click", (ev) => onToggle(ev, node, head));
 
   const kids = h("div.jt-children");
-  entries.forEach(([k, v], i) => {
-    const childKey = isArray ? null : k;
-    kids.appendChild(
-      buildEntry(childKey, v, `${path}/${k}`, i === entries.length - 1, opts, depth + 1),
-    );
-  });
+  // Lazy child construction (§4.3.5): a collapsed container defers building its
+  // subtree until first expand, so a deeply-nested or huge body only builds the
+  // rows the user actually opens. `built` guards against rebuilding on re-expand.
+  let built = false;
+  const buildChildren = () => {
+    if (built) return;
+    built = true;
+    appendPage(kids, entries, isArray, path, opts, depth, 0);
+  };
+  if (!collapsed) buildChildren();
+  // onToggle (below) calls buildChildren before un-collapsing so the children
+  // exist when the node opens.
+  head.addEventListener("click", (ev) => onToggle(ev, node, head, buildChildren));
 
   const foot = h("div.jt-foot");
   foot.appendChild(punct(close));
@@ -133,6 +143,46 @@ function buildContainer(
   node.appendChild(kids);
   node.appendChild(foot);
   return node;
+}
+
+// appendPage appends children [start, start+PAGE_SIZE) to `kids`. When more
+// remain it appends a "show more" button that, on click, removes itself and
+// appends the next page — so a 10k-element array renders 200 rows at a time.
+function appendPage(
+  kids: HTMLElement,
+  entries: [string, unknown][],
+  isArray: boolean,
+  path: string,
+  opts: JsonTreeOpts,
+  depth: number,
+  start: number,
+) {
+  const end = Math.min(start + PAGE_SIZE, entries.length);
+  for (let i = start; i < end; i++) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const [k, v] = entry;
+    const childKey = isArray ? null : k;
+    kids.appendChild(
+      buildEntry(childKey, v, `${path}/${k}`, i === entries.length - 1, opts, depth + 1),
+    );
+  }
+  if (end < entries.length) {
+    const remaining = entries.length - end;
+    const more = h(
+      "button.jt-more",
+      {
+        type: "button",
+        onclick: (ev: Event) => {
+          ev.stopPropagation();
+          more.remove();
+          appendPage(kids, entries, isArray, path, opts, depth, end);
+        },
+      },
+      `▾ show ${Math.min(PAGE_SIZE, remaining)} more (${remaining} left)`,
+    );
+    kids.appendChild(more);
+  }
 }
 
 function leafRow(keyText: string | null, valueEl: HTMLElement, isLast: boolean): HTMLElement {
@@ -146,13 +196,20 @@ function leafRow(keyText: string | null, valueEl: HTMLElement, isLast: boolean):
   return row;
 }
 
-function onToggle(ev: MouseEvent, node: HTMLElement, head: HTMLElement) {
+function onToggle(
+  ev: MouseEvent,
+  node: HTMLElement,
+  head: HTMLElement,
+  buildChildren: () => void,
+) {
   // Don't toggle when the user is selecting text inside this head — keeps keys
   // and values copyable by drag-select.
   const sel = window.getSelection();
   if (sel && !sel.isCollapsed && sel.anchorNode && head.contains(sel.anchorNode)) return;
   ev.stopPropagation();
   const target = !node.classList.contains("collapsed");
+  // target=false means we're about to expand → ensure children exist first.
+  if (!target) buildChildren();
   if (ev.altKey) {
     // Recursive: fold/unfold this node and every descendant to the same target.
     setFold(node, target);
