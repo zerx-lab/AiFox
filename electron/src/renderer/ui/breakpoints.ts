@@ -2,7 +2,13 @@
 // affordances to add / enable / disable / delete / continue / abort.
 
 import type { components } from "../../api/client";
-import { getClient } from "../../api/client";
+import {
+  abortPaused,
+  addBreakpoint,
+  continuePaused,
+  deleteBreakpoint,
+  updateBreakpoint,
+} from "./api-service";
 import { t } from "../i18n";
 import { h } from "./dom";
 import { fmtClock } from "./format";
@@ -19,10 +25,23 @@ interface DraftForm {
 // Module-scoped draft so the input box doesn't reset every full re-render.
 const draft: DraftForm = { match: "endpoint", pattern: "", enabled: true };
 
+// entryIds with an in-flight continue/abort. Used to disable BOTH buttons on a
+// paused row while the request is being resolved so a double-click can't fire
+// two continue/abort calls (§4.1.1). Survives re-renders because it's
+// module-scoped; entries clear when the row leaves the paused list (the SSE
+// breakpoints event drops it) or the call settles.
+const resolving = new Set<string>();
+
 export function renderBreakpoints(): HTMLElement {
   const state = getState();
   const bps = state.breakpoints;
   const paused = state.pausedRequests;
+
+  // Drop pending flags for rows that are no longer paused (resolved upstream).
+  if (resolving.size > 0) {
+    const live = new Set(paused.map((p) => p.entryId));
+    for (const id of resolving) if (!live.has(id)) resolving.delete(id);
+  }
 
   const wrap = h("div.bp-wrap");
 
@@ -66,18 +85,17 @@ export function renderBreakpoints(): HTMLElement {
     {
       onclick: async () => {
         if (!draft.pattern.trim()) return;
-        const client = await getClient();
-        await client.POST("/v1/breakpoints", {
-          body: {
-            match: draft.match,
-            pattern: draft.pattern.trim(),
-            enabled: draft.enabled,
-          },
+        const res = await addBreakpoint({
+          match: draft.match,
+          pattern: draft.pattern.trim(),
+          enabled: draft.enabled,
         });
+        if (!res.ok) return; // service toasted the failure
         draft.pattern = "";
         // Trigger re-render; the SSE 'breakpoints' event also updates state,
-        // but the click handler's caller doesn't re-render, so nudge here.
-        setState({});
+        // but the click handler's caller doesn't re-render, so nudge the
+        // 'struct' slice (the breakpoints list lives there).
+        setState({ breakpoints: getState().breakpoints });
       },
     },
     t("bp.add"),
@@ -112,11 +130,7 @@ function renderBpRow(bp: BreakpointWire): HTMLElement {
         class: `bp-toggle${bp.enabled ? " on" : ""}`,
         title: bp.enabled ? t("bp.disable") : t("bp.enable"),
         onclick: async () => {
-          const client = await getClient();
-          await client.PUT("/v1/breakpoints/{id}", {
-            params: { path: { id: bp.id } },
-            body: { enabled: !bp.enabled },
-          });
+          await updateBreakpoint(bp.id, !bp.enabled);
         },
       },
       bp.enabled ? "●" : "○",
@@ -129,10 +143,7 @@ function renderBpRow(bp: BreakpointWire): HTMLElement {
       {
         title: t("bp.delete"),
         onclick: async () => {
-          const client = await getClient();
-          await client.DELETE("/v1/breakpoints/{id}", {
-            params: { path: { id: bp.id } },
-          });
+          await deleteBreakpoint(bp.id);
         },
       },
       "✕",
@@ -141,6 +152,27 @@ function renderBpRow(bp: BreakpointWire): HTMLElement {
 }
 
 function renderPausedRow(p: components["schemas"]["Paused"]): HTMLElement {
+  const pending = resolving.has(p.entryId);
+
+  // resolve runs a continue/abort through the service with a pending guard:
+  // marks the entry resolving, disables both buttons (visually + functionally),
+  // then re-renders. The paused row vanishes via the SSE breakpoints event when
+  // the backend releases the request; on failure the service toasts and we drop
+  // the pending flag so the user can retry.
+  const resolve = (
+    action: (id: string) => Promise<boolean>,
+  ) => async () => {
+    if (resolving.has(p.entryId)) return;
+    resolving.add(p.entryId);
+    setState({ breakpoints: getState().breakpoints }); // bump struct → re-render
+    const ok = await action(p.entryId);
+    if (!ok) {
+      resolving.delete(p.entryId);
+      setState({ breakpoints: getState().breakpoints });
+    }
+    // On success leave the flag set; the breakpoints SSE event removes the row.
+  };
+
   return h(
     "div.bp-paused-row",
     null,
@@ -158,24 +190,18 @@ function renderPausedRow(p: components["schemas"]["Paused"]): HTMLElement {
     h(
       "button.btn",
       {
-        onclick: async () => {
-          const client = await getClient();
-          await client.POST("/v1/breakpoints/paused/{entryId}/continue", {
-            params: { path: { entryId: p.entryId } },
-          });
-        },
+        disabled: pending,
+        "aria-busy": pending ? "true" : "false",
+        onclick: resolve(continuePaused),
       },
-      t("bp.continue"),
+      pending ? t("bp.resolving") : t("bp.continue"),
     ),
     h(
       "button.btn.secondary",
       {
-        onclick: async () => {
-          const client = await getClient();
-          await client.POST("/v1/breakpoints/paused/{entryId}/abort", {
-            params: { path: { entryId: p.entryId } },
-          });
-        },
+        disabled: pending,
+        "aria-busy": pending ? "true" : "false",
+        onclick: resolve(abortPaused),
       },
       t("bp.abort"),
     ),

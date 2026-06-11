@@ -114,6 +114,52 @@ export interface AppState {
 
 type Listener = (s: AppState) => void;
 
+// EntryTotals are the running aggregate counters the statusbar shows (byte and
+// token sums across all entries). Maintained incrementally (§4.3.4): a full
+// O(n) reduce ran on EVERY statusbar render before; now replaceEntries does one
+// full recompute and upsertEntry applies a per-field delta (new − previous
+// value for that entry), so the statusbar just reads the cached struct.
+export interface EntryTotals {
+  bytesIn: number;
+  bytesOut: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheRead: number;
+  cacheCreate: number;
+}
+
+function emptyTotals(): EntryTotals {
+  return {
+    bytesIn: 0,
+    bytesOut: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheRead: 0,
+    cacheCreate: 0,
+  };
+}
+
+function addEntryToTotals(t: EntryTotals, e: EntryMeta, sign: 1 | -1) {
+  t.bytesIn += sign * (e.requestSize ?? 0);
+  t.bytesOut += sign * (e.responseSize ?? 0);
+  t.inputTokens += sign * (e.inputTokens ?? 0);
+  t.outputTokens += sign * (e.outputTokens ?? 0);
+  t.cacheRead += sign * (e.cacheRead ?? 0);
+  t.cacheCreate += sign * (e.cacheCreate ?? 0);
+}
+
+const entryTotals: EntryTotals = emptyTotals();
+
+// getEntryTotals returns the live aggregate counters. The object is mutated in
+// place as entries change; the statusbar reads it on each (meta-driven) render.
+export function getEntryTotals(): EntryTotals {
+  return entryTotals;
+}
+
+// Default bottom-pane height (px). Exported so the double-click reset on the
+// resize handle can restore it.
+export const DEFAULT_BOTTOM_HEIGHT = 200;
+
 const state: AppState = {
   view: "traffic",
   entries: [],
@@ -127,7 +173,7 @@ const state: AppState = {
   cacheStyle: "segmented",
   bottomTab: "console",
   bottomCollapsed: false,
-  bottomHeight: 200,
+  bottomHeight: DEFAULT_BOTTOM_HEIGHT,
   colLeft: null,
   colRight: null,
   centerView: "timeline",
@@ -166,8 +212,16 @@ const listeners = new Set<Listener>();
 //            also reconciles in place (keeps the `.detail-body` element
 //            identity and swaps only its children), so a tab switch never tears
 //            down the whole panel — that wholesale teardown was the flicker.
-//   ui     — chrome / filters / layout: view, filters, expanded sets, bottom
-//            pane geometry, proxy/settings/env, rename. Drives most regions.
+//   ui     — chrome / layout: view, expanded sets, bottom pane geometry,
+//            settings/env, rename. Drives most regions. Split out of the old
+//            catch-all: proxy state and filters now have their own slices so a
+//            proxy toggle or a filter tweak no longer rebuilds unrelated regions.
+//   proxy  — proxy connection state (proxy info) + SSE connection status.
+//            Drives the topbar and statusbar only; a proxy flip no longer churns
+//            the sidebar/filter bar/settings page.
+//   filters— the traffic filter (text / streaming / errors / model). Drives the
+//            filter bar + sidebar (filtered list) only. A filter tweak no longer
+//            rebuilds the topbar/settings.
 //   meta   — per-entry token/size ticks that only the statusbar totals consume;
 //            deliberately NOT a sidebar dependency so token updates don't churn
 //            the list.
@@ -179,7 +233,17 @@ const listeners = new Set<Listener>();
 //            render region, so dragging a resize handle re-runs applyColumns()
 //            (which re-reads the fresh width) without rebuilding the expensive
 //            sidebar/detail subtrees on every mousemove.
-export const versions = { struct: 0, sel: 0, ui: 0, meta: 0, body: 0, detail: 0, layout: 0 };
+export const versions = {
+  struct: 0,
+  sel: 0,
+  ui: 0,
+  meta: 0,
+  body: 0,
+  detail: 0,
+  layout: 0,
+  proxy: 0,
+  filters: 0,
+};
 type VKind = keyof typeof versions;
 
 function touch(...kinds: VKind[]) {
@@ -205,8 +269,8 @@ const KEY_VERSION: Record<keyof AppState, VKind> = {
   colLeft: "layout",
   colRight: "layout",
   centerView: "sel",
-  filter: "ui",
-  filters: "ui",
+  filter: "filters",
+  filters: "filters",
   collapsedGroups: "ui",
   expandedSessions: "ui",
   expandedMessages: "sel",
@@ -214,11 +278,11 @@ const KEY_VERSION: Record<keyof AppState, VKind> = {
   replayOpen: "sel",
   breakpoints: "struct",
   pausedRequests: "struct",
-  proxy: "ui",
+  proxy: "proxy",
   settings: "ui",
   env: "ui",
   windowMaximized: "ui",
-  connection: "ui",
+  connection: "proxy",
 };
 
 export function getState(): AppState {
@@ -303,9 +367,21 @@ export function setColRight(px: number) {
   touch("layout");
 }
 
+// resetColLeft/resetColRight clear an explicit width back to null so the
+// stylesheet's responsive default takes over (double-click on a resize handle).
+export function resetColLeft() {
+  state.colLeft = null;
+  touch("layout");
+}
+
+export function resetColRight() {
+  state.colRight = null;
+  touch("layout");
+}
+
 export function setFilters(patch: Partial<TrafficFilter>) {
   state.filters = { ...state.filters, ...patch };
-  touch("ui");
+  touch("filters");
 }
 
 export function toggleGroupCollapsed(key: string) {
@@ -379,11 +455,24 @@ export function upsertEntry(next: EntryMeta) {
     state.selectedId !== null &&
     latestReal(sid) === state.selectedId;
 
+  // Keep the incremental statusbar totals in sync (§4.3.4): a brand-new entry
+  // adds; an update swaps the previous values for the new ones.
+  if (isNew) {
+    addEntryToTotals(entryTotals, next, 1);
+  } else if (prev) {
+    addEntryToTotals(entryTotals, prev, -1);
+    addEntryToTotals(entryTotals, next, 1);
+  }
+
   if (isNew) {
     state.entries.unshift(next);
     // Trim to ring-buffer cap: drop the oldest entries (tail) to keep the
     // front-end array aligned with the Go backend's eviction limit.
     if (state.entries.length > ENTRIES_CAP) {
+      for (let i = ENTRIES_CAP; i < state.entries.length; i++) {
+        const dropped = state.entries[i];
+        if (dropped) addEntryToTotals(entryTotals, dropped, -1);
+      }
       state.entries.length = ENTRIES_CAP;
     }
   } else {
@@ -415,6 +504,9 @@ const ENTRIES_CAP = 500;
 export function replaceEntries(items: EntryMeta[]) {
   const selectedBefore = state.selectedId;
   state.entries = [...items];
+  // Snapshot replaces the whole list → recompute totals once (§4.3.4).
+  Object.assign(entryTotals, emptyTotals());
+  for (const e of state.entries) addEntryToTotals(entryTotals, e, 1);
   if (state.selectedId === null) {
     state.selectedId = autoPickEntry(state.entries);
   } else {
@@ -484,6 +576,7 @@ export function selectedFull(): TrafficEntry | null {
 
 export function clearEntries() {
   state.entries = [];
+  Object.assign(entryTotals, emptyTotals());
   state.selectedEntry = null;
   state.sessions = [];
   state.selectedSessionId = null;

@@ -3,7 +3,7 @@
 // toggles live in the titlebar (icon-only), so the topbar stays focused on
 // the proxy state — the thing the user actually interacts with constantly.
 
-import { getClient } from "../../api/client";
+import { setProxyEnabled } from "./api-service";
 import { t } from "../i18n";
 import { h } from "./dom";
 import { getState, setReplayOpen, setState } from "./state";
@@ -47,16 +47,12 @@ export function renderTopbar(): HTMLElement {
       class: `proxy-toggle${proxyEnabled ? " on" : " off"}`,
       title: proxyEnabled ? t("topbar.proxyToggleOff") : t("topbar.proxyToggleOn"),
       onclick: async () => {
-        const client = await getClient();
-        const desired = !proxyEnabled;
-        const { data } = await client.PUT("/v1/proxy", {
-          body: { enabled: desired },
-        });
-        if (data) {
-          setState({ proxy: data });
+        const res = await setProxyEnabled(!proxyEnabled);
+        if (res.ok) {
+          setState({ proxy: res.data });
           const current = getState().settings;
           if (current) {
-            setState({ settings: { ...current, proxyEnabled: data.enabled } });
+            setState({ settings: { ...current, proxyEnabled: res.data.enabled } });
           }
         }
       },

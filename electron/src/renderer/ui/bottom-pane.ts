@@ -7,9 +7,11 @@ import { t } from "../i18n";
 import { renderBreakpoints } from "./breakpoints";
 import { renderConsole } from "./console";
 import { h } from "./dom";
+import { scheduleLayoutSave } from "./layout-persist";
 import { renderProblems } from "./problems";
 import {
   type BottomTab,
+  DEFAULT_BOTTOM_HEIGHT,
   getState,
   setBottomHeight,
   setBottomTab,
@@ -33,6 +35,11 @@ export function renderBottomPane(): HTMLElement {
       "div.bottom-resize",
       {
         onmousedown: startResize,
+        // Double-click resets the pane to its default height and persists it.
+        ondblclick: () => {
+          setBottomHeight(DEFAULT_BOTTOM_HEIGHT);
+          scheduleLayoutSave();
+        },
         title: t("bottom.resize"),
       },
     ),
@@ -154,6 +161,8 @@ function startResize(ev: MouseEvent) {
   const up = () => {
     window.removeEventListener("mousemove", move);
     window.removeEventListener("mouseup", up);
+    // Persist the final height once the gesture ends (debounced).
+    scheduleLayoutSave();
   };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", up);

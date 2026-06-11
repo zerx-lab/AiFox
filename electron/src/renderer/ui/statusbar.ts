@@ -1,8 +1,7 @@
 import { t } from "../i18n";
 import { h } from "./dom";
 import { fmtBytes } from "./format";
-import { aggregateUsage } from "./grouping";
-import { getState, setState } from "./state";
+import { getEntryTotals, getState, setBottomTab, setState } from "./state";
 
 export function renderStatusbar(): HTMLElement {
   const s = getState();
@@ -14,14 +13,15 @@ export function renderStatusbar(): HTMLElement {
       ? t("status.listening", { address: s.proxy.address })
       : t("status.notListening");
 
-  const bytesIn = s.entries.reduce((acc, e) => acc + (e.requestSize ?? 0), 0);
-  const bytesOut = s.entries.reduce((acc, e) => acc + (e.responseSize ?? 0), 0);
-
-  // Session-level cache hit rate now lives inside the right-hand Overview
-  // tab. The statusbar keeps the global counters (entries / bytes / tokens)
-  // so the bottom strip still tells the user "is anything happening?".
-  const totals = aggregateUsage(s.entries);
-  const tokAll = totals.input + totals.cacheRead + totals.cacheCreate + totals.output;
+  // Byte + token sums come from the incrementally-maintained totals (§4.3.4)
+  // instead of an O(n) reduce on every render. Session-level cache hit rate
+  // lives inside the right-hand Overview tab; the statusbar keeps the global
+  // counters so the bottom strip still tells the user "is anything happening?".
+  const totals = getEntryTotals();
+  const bytesIn = totals.bytesIn;
+  const bytesOut = totals.bytesOut;
+  const tokAll =
+    totals.inputTokens + totals.cacheRead + totals.cacheCreate + totals.outputTokens;
 
   const inSettings = s.view === "settings";
   const settingsBtn = h(
@@ -35,6 +35,25 @@ export function renderStatusbar(): HTMLElement {
     },
     gearIcon(),
   );
+
+  // Paused-requests indicator (§4.1.1). Always visible while any request is
+  // held at a breakpoint — even when the bottom pane is collapsed — because a
+  // held request can stall the user's agent for minutes without other UI cues.
+  // Clicking jumps to the Breakpoints tab (setBottomTab un-collapses the pane).
+  const pausedCount = s.pausedRequests.length;
+  const pausedEl =
+    pausedCount > 0
+      ? h(
+          "button.statusbar-paused",
+          {
+            title: t("status.pausedTitle"),
+            "aria-label": t("status.paused", { count: pausedCount }),
+            onclick: () => setBottomTab("breakpoints"),
+          },
+          h("span.statusbar-paused-mark", null, "⏸"),
+          t("status.paused", { count: pausedCount }),
+        )
+      : null;
 
   // SSE connection indicator — only shown when disconnected or reconnecting.
   const connEl =
@@ -53,6 +72,8 @@ export function renderStatusbar(): HTMLElement {
     "div.statusbar",
     null,
     settingsBtn,
+    pausedEl,
+    pausedEl ? h("span", null, "·") : null,
     connEl,
     connEl ? h("span", null, "·") : null,
     h("span", { class: s.proxy?.configured ? "ok" : "warn" }, proxyText),

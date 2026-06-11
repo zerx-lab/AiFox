@@ -4,6 +4,7 @@
 import { getClient } from "../api/client";
 import { setLanguage } from "./i18n";
 import { mountApp } from "./ui/app";
+import { applyPersistedLayout } from "./ui/layout-persist";
 import { initSelection } from "./ui/selection";
 import { openSse } from "./ui/sse";
 import {
@@ -62,6 +63,9 @@ async function bootstrap() {
     setState({ settings: settingsResp.data });
     setLanguage((settingsResp.data.language ?? "") as "" | "en" | "zh-CN");
     setTheme((settingsResp.data.theme ?? "") as ThemeChoice);
+    // Restore the user's persisted panel geometry before the first mount so the
+    // window opens at the shape they left it (no resize flash).
+    applyPersistedLayout(settingsResp.data);
   }
   if (proxyResp.data) setState({ proxy: proxyResp.data });
 

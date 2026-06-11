@@ -84,6 +84,18 @@ type Settings struct {
 	Language Language `json:"language"`
 	// Theme is the active color scheme. Empty means "follow OS".
 	Theme Theme `json:"theme"`
+	// Layout persists the user's dragged panel geometry so the window restores
+	// its shape across restarts. Zero on any field means "not set" → the
+	// renderer falls back to its responsive stylesheet defaults.
+	Layout Layout `json:"layout"`
+}
+
+// Layout holds the renderer's persisted panel geometry (column widths + bottom
+// pane height, all in CSS px). A zero value means "use the stylesheet default".
+type Layout struct {
+	ColLeft      int `json:"colLeft"`
+	ColRight     int `json:"colRight"`
+	BottomHeight int `json:"bottomHeight"`
 }
 
 // Store wraps a Settings value with mutex protection and on-disk persistence.
@@ -131,6 +143,20 @@ func (s *Store) Get() Settings {
 func (s *Store) Set(next Settings) error {
 	s.mu.Lock()
 	s.settings = normalize(next)
+	snapshot := s.settings
+	path := s.path
+	s.mu.Unlock()
+	return write(path, snapshot)
+}
+
+// SetLayout updates ONLY the persisted layout geometry, leaving every other
+// settings field untouched. This is the dedicated path for the renderer's
+// resize-drag persistence: it must not race with (and overwrite) a settings
+// form the user is editing, so it does a locked read-modify-write of just the
+// Layout sub-struct rather than replacing the whole Settings value.
+func (s *Store) SetLayout(l Layout) error {
+	s.mu.Lock()
+	s.settings.Layout = normalizeLayout(l)
 	snapshot := s.settings
 	path := s.path
 	s.mu.Unlock()
@@ -187,7 +213,33 @@ func normalize(s Settings) Settings {
 	if s.ProxyPort < 1 || s.ProxyPort > 65535 {
 		s.ProxyPort = DefaultProxyPort
 	}
+	s.Layout = normalizeLayout(s.Layout)
 	return s
+}
+
+// normalizeLayout clamps persisted geometry to sane bounds and drops negatives
+// to zero ("not set"). Bounds mirror the renderer's clamp ranges in state.ts so
+// a hand-edited config can't push a panel off-screen.
+func normalizeLayout(l Layout) Layout {
+	l.ColLeft = clampGeom(l.ColLeft, 180, 640)
+	l.ColRight = clampGeom(l.ColRight, 280, 900)
+	l.BottomHeight = clampGeom(l.BottomHeight, 80, 600)
+	return l
+}
+
+// clampGeom returns 0 ("not set") for non-positive input, otherwise clamps the
+// value into [min, max].
+func clampGeom(v, min, max int) int {
+	if v <= 0 {
+		return 0
+	}
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func write(path string, s Settings) error {

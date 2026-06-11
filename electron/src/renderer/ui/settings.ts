@@ -2,7 +2,7 @@
 // whole SettingsBody back to /v1/settings, applies theme/language locally,
 // and refreshes the proxy info chip.
 
-import { getClient } from "../../api/client";
+import { getProxyInfo, putSettings } from "./api-service";
 import { setLanguage, supportedLanguages, t } from "../i18n";
 import { h } from "./dom";
 import { customSelect } from "./select";
@@ -45,6 +45,7 @@ function emptySettings(): Settings {
     proxyPort: DEFAULT_PROXY_PORT,
     language: "",
     theme: "",
+    layout: { colLeft: 0, colRight: 0, bottomHeight: 0 },
   };
 }
 
@@ -218,26 +219,34 @@ export function renderSettings(): HTMLElement {
           proxyPort: clampPort(draft.proxyPort),
           language: draft.language as Settings["language"],
           theme: draft.theme as Settings["theme"],
+          // Layout is owned by the resize-drag persistence (separate endpoint);
+          // pass the server's current value through untouched so a settings
+          // Save never resets the user's panel geometry.
+          layout: getState().settings?.layout ?? {
+            colLeft: 0,
+            colRight: 0,
+            bottomHeight: 0,
+          },
         };
-        const client = await getClient();
-        const { data, error } = await client.PUT("/v1/settings", { body: next });
-        if (error || !data) {
-          toast.textContent = t("settings.saveFailed", {
-            error: String((error as { detail?: string })?.detail ?? "unknown"),
-          });
+        const res = await putSettings(next);
+        if (!res.ok) {
+          // The service already surfaced the error via the global toast; reflect
+          // it inline next to the Save button too.
+          toast.textContent = t("settings.saveFailedGeneric");
           toast.style.color = "var(--err)";
           btn.disabled = false;
           btn.textContent = t("settings.save");
           saving = false;
           return;
         }
+        const data = res.data;
         setState({ settings: data });
         setLanguage((data.language ?? "") as "" | "en" | "zh-CN");
         setTheme((data.theme ?? "") as ThemeChoice);
         // Refresh proxy info so the chip + statusbar reflect the new enabled
         // state and the configured/notConfigured warning.
-        const info = await client.GET("/v1/proxy", {});
-        if (info.data) setState({ proxy: info.data });
+        const info = await getProxyInfo();
+        if (info.ok) setState({ proxy: info.data });
         toast.textContent = t("settings.saved");
         toast.style.color = "var(--ok)";
         btn.disabled = false;

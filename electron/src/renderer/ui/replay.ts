@@ -2,7 +2,7 @@
 // overrides applied. The new entry will arrive via the SSE stream and the
 // sidebar will tag it with "↩ replay of <id>".
 
-import { getClient } from "../../api/client";
+import { replayEntry } from "./api-service";
 import { t } from "../i18n";
 import { h } from "./dom";
 import { getState, selectedFull, setReplayOpen, setState, type TrafficEntry } from "./state";
@@ -65,28 +65,19 @@ export function renderReplayPopover(): HTMLElement | null {
           onclick: async () => {
             status.textContent = t("replay.running");
             status.className = "replay-status info";
-            try {
-              const client = await getClient();
-              const overrides = buildOverrides(draft, entry);
-              const { data, error } = await client.POST("/v1/traffic/{id}/replay", {
-                params: { path: { id: entry.id } },
-                body: { overrides },
-              });
-              if (error || !data) {
-                status.textContent = t("replay.failed", {
-                  error: String((error as { detail?: string })?.detail ?? "unknown"),
-                });
-                status.className = "replay-status err";
-                return;
-              }
-              setReplayOpen(false);
-              // Pre-select the freshly issued entry so the user sees the
-              // result immediately instead of having to find it in the list.
-              setState({ selectedId: data.entryId });
-            } catch (e) {
-              status.textContent = t("replay.failed", { error: String(e) });
+            const overrides = buildOverrides(draft, entry);
+            // The service toasts on failure; we additionally reflect it inline
+            // in the popover (which is about to close on success).
+            const res = await replayEntry(entry.id, overrides);
+            if (!res.ok) {
+              status.textContent = t("replay.failedGeneric");
               status.className = "replay-status err";
+              return;
             }
+            setReplayOpen(false);
+            // Pre-select the freshly issued entry so the user sees the
+            // result immediately instead of having to find it in the list.
+            setState({ selectedId: res.data.entryId });
           },
         },
         t("replay.run"),

@@ -200,6 +200,7 @@ export const zhCN: Dictionary = {
     saving: "保存中…",
     saved: "已保存。",
     saveFailed: "保存失败：{error}",
+    saveFailedGeneric: "保存失败。",
   },
   status: {
     entries: "{count} 条记录",
@@ -209,6 +210,28 @@ export const zhCN: Dictionary = {
     cached: "命中缓存 {pct}%",
     sseDisconnected: "已断开",
     sseReconnecting: "重连中…",
+    paused: "{count} 个已暂停",
+    pausedTitle: "有请求在断点处暂停 —— 点击查看",
+  },
+  toast: {
+    dismiss: "关闭",
+    failed: "{what}失败：{error}",
+    ctx: {
+      fetchEntry: "加载记录",
+      clearTraffic: "清空流量",
+      loadSettings: "加载设置",
+      saveSettings: "保存设置",
+      proxyInfo: "刷新代理信息",
+      proxyToggle: "切换代理",
+      renameSession: "重命名会话",
+      addBreakpoint: "添加断点",
+      updateBreakpoint: "更新断点",
+      deleteBreakpoint: "删除断点",
+      continuePaused: "继续请求",
+      abortPaused: "中止请求",
+      replay: "重放",
+      saveLayout: "保存布局",
+    },
   },
   filter: {
     streaming: "流式",
@@ -237,6 +260,7 @@ export const zhCN: Dictionary = {
     run: "运行重放",
     running: "正在发送…",
     failed: "重放失败：{error}",
+    failedGeneric: "重放失败。",
   },
   bottom: {
     tabs: {
@@ -281,6 +305,7 @@ export const zhCN: Dictionary = {
     pausedTitle: "已暂停 — {count}",
     continue: "继续",
     abort: "中止",
+    resolving: "处理中…",
   },
   conversation: {
     requestTitle: "请求",

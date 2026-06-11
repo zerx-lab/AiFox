@@ -201,6 +201,7 @@ export const en = {
     saving: "Saving…",
     saved: "Settings saved.",
     saveFailed: "Save failed: {error}",
+    saveFailedGeneric: "Save failed.",
   },
   status: {
     entries: "{count} entries",
@@ -210,6 +211,28 @@ export const en = {
     cached: "{pct}% cached",
     sseDisconnected: "Disconnected",
     sseReconnecting: "Reconnecting…",
+    paused: "{count} paused",
+    pausedTitle: "Requests held at a breakpoint — click to review",
+  },
+  toast: {
+    dismiss: "Dismiss",
+    failed: "{what} failed: {error}",
+    ctx: {
+      fetchEntry: "Load entry",
+      clearTraffic: "Clear traffic",
+      loadSettings: "Load settings",
+      saveSettings: "Save settings",
+      proxyInfo: "Refresh proxy info",
+      proxyToggle: "Toggle proxy",
+      renameSession: "Rename session",
+      addBreakpoint: "Add breakpoint",
+      updateBreakpoint: "Update breakpoint",
+      deleteBreakpoint: "Delete breakpoint",
+      continuePaused: "Continue request",
+      abortPaused: "Abort request",
+      replay: "Replay",
+      saveLayout: "Save layout",
+    },
   },
   filter: {
     streaming: "streaming",
@@ -238,6 +261,7 @@ export const en = {
     run: "Run replay",
     running: "Issuing replay…",
     failed: "Replay failed: {error}",
+    failedGeneric: "Replay failed.",
   },
   bottom: {
     tabs: {
@@ -283,6 +307,7 @@ export const en = {
     pausedTitle: "Paused — {count}",
     continue: "Continue",
     abort: "Abort",
+    resolving: "Resolving…",
   },
   conversation: {
     requestTitle: "Request",

@@ -9,13 +9,20 @@
 
 import { t } from "../i18n";
 import { h } from "./dom";
-import { setColLeft, setColRight } from "./state";
+import { scheduleLayoutSave } from "./layout-persist";
+import { resetColLeft, resetColRight, setColLeft, setColRight } from "./state";
 
 export function colResizeHandle(side: "left" | "right"): HTMLElement {
   return h("div", {
     class: `col-resize col-resize-${side}`,
     title: t("layout.resizeColumn"),
     onmousedown: (ev: MouseEvent) => startColResize(side, ev),
+    // Double-click resets the column to its responsive default and persists it.
+    ondblclick: () => {
+      if (side === "left") resetColLeft();
+      else resetColRight();
+      scheduleLayoutSave();
+    },
   });
 }
 
@@ -40,6 +47,8 @@ function startColResize(side: "left" | "right", ev: MouseEvent) {
     window.removeEventListener("mousemove", move);
     window.removeEventListener("mouseup", up);
     document.body.classList.remove("col-resizing");
+    // Persist the final width once the gesture ends (debounced).
+    scheduleLayoutSave();
   };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", up);

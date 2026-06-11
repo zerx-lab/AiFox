@@ -10,7 +10,7 @@
 // and preserves the user's text selection. When the entry finalizes we fetch
 // the full entry once more for the authoritative analysis.
 
-import { getClient } from "../../api/client";
+import { fetchEntry, fetchTail } from "./api-service";
 import {
   appendSelectedBody,
   getState,
@@ -58,9 +58,10 @@ async function reconcile() {
 
 async function loadOnce(id: string) {
   const token = ++fetchToken;
-  const entry = await fetchEntry(id);
+  const res = await fetchEntry(id);
   if (token !== fetchToken || getState().selectedId !== id) return;
-  if (!entry) return;
+  if (!res.ok) return; // service already toasted the failure
+  const entry = res.data;
   setSelectedEntry(entry);
   if (!isFinished(entry)) {
     scheduleTail(id);
@@ -116,34 +117,4 @@ function isFinished(e: TrafficEntry): boolean {
   // timestamp is positive. Mirrors format.ts isPending.
   const ended = e.endedAt ? new Date(e.endedAt).getTime() : 0;
   return ended > 0;
-}
-
-async function fetchEntry(id: string): Promise<TrafficEntry | null> {
-  try {
-    const client = await getClient();
-    const resp = await client.GET("/v1/traffic/{id}", {
-      params: { path: { id } },
-    });
-    return resp.data ?? null;
-  } catch {
-    return null;
-  }
-}
-
-interface Tail {
-  appendBytes: string;
-  responseSize: number;
-  done: boolean;
-}
-
-async function fetchTail(id: string, since: number): Promise<Tail | null> {
-  try {
-    const client = await getClient();
-    const resp = await client.GET("/v1/traffic/{id}/tail", {
-      params: { path: { id }, query: { since } },
-    });
-    return resp.data ?? null;
-  } catch {
-    return null;
-  }
 }

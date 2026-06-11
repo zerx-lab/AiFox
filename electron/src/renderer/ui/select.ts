@@ -2,6 +2,7 @@
 // look like a generic web form. Used by titlebar (theme/language toggles),
 // settings page, and the filter bar.
 
+import { registerDispose } from "./app";
 import { h } from "./dom";
 
 export interface SelectOption {
@@ -85,6 +86,18 @@ export function customSelect(opts: SelectOpts): HTMLElement {
 
   let open = false;
   let docCtrl: AbortController | null = null;
+
+  // Region dispose protocol: when the enclosing region is rebuilt/discarded,
+  // app.ts walks the outgoing subtree and runs this, aborting any open menu's
+  // document-level listeners. This replaces the old reliance on the next
+  // document event noticing root.isConnected === false (which never fired if no
+  // further document event arrived — the F4 leak). The isConnected guards below
+  // stay as a belt-and-suspenders fallback.
+  registerDispose(root, () => {
+    docCtrl?.abort();
+    docCtrl = null;
+    open = false;
+  });
 
   const close = () => setOpen(false);
 

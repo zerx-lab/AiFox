@@ -5,7 +5,7 @@
 // Filters apply to the entry layer; a session that ends up with zero
 // matching entries is hidden until the filter clears.
 
-import { getClient } from "../../api/client";
+import { clearTraffic, renameSession } from "./api-service";
 import { t } from "../i18n";
 import { colResizeHandle } from "./col-resize";
 import { h } from "./dom";
@@ -64,9 +64,7 @@ export function renderSidebar(): HTMLElement {
       {
         onclick: async () => {
           if (!confirm(t("sidebar.confirmClear"))) return;
-          const client = await getClient();
-          await client.DELETE("/v1/traffic", {});
-          clearEntries();
+          if (await clearTraffic()) clearEntries();
         },
       },
       t("sidebar.clear"),
@@ -236,16 +234,9 @@ function renameInput(s: SessionSummary, initial: string): HTMLInputElement {
       setRenamingSession(null);
       return;
     }
-    try {
-      const client = await getClient();
-      await client.PATCH("/v1/sessions/{id}", {
-        params: { path: { id: s.id } },
-        body: { name: next },
-      });
-    } catch {
-      // Roll back silently on failure — the next /v1/sessions refresh will
-      // bring whatever the server has back into the renderer state.
-    }
+    // The service toasts on failure; the next /v1/sessions refresh reconciles
+    // the renderer state either way.
+    await renameSession(s.id, next);
     setRenamingSession(null);
   };
 

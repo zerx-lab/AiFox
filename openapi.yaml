@@ -471,6 +471,33 @@ components:
         - status
         - time
       type: object
+    LayoutBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/LayoutBody.json
+          format: uri
+          readOnly: true
+          type: string
+        bottomHeight:
+          description: Bottom pane height in px (0 = default)
+          format: int64
+          type: integer
+        colLeft:
+          description: Sidebar width in px (0 = default)
+          format: int64
+          type: integer
+        colRight:
+          description: Detail panel width in px (0 = default)
+          format: int64
+          type: integer
+      required:
+        - colLeft
+        - colRight
+        - bottomHeight
+      type: object
     ListBreakpointsOutputBody:
       additionalProperties: false
       properties:
@@ -1183,6 +1210,9 @@ components:
             - en
             - zh-CN
           type: string
+        layout:
+          $ref: "#/components/schemas/LayoutBody"
+          description: Persisted panel geometry (px). Zero on a field means use the stylesheet default.
         proxyEnabled:
           description: Whether the proxy listener should be running
           type: boolean
@@ -1214,6 +1244,7 @@ components:
         - proxyPort
         - language
         - theme
+        - layout
       type: object
     TrafficEntry:
       additionalProperties: false
@@ -1662,6 +1693,32 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Replace persisted user settings
+      tags:
+        - settings
+  /v1/settings/layout:
+    put:
+      description: Updates the colLeft / colRight / bottomHeight fields in isolation (read-modify-write), so a resize-drag save never clobbers an in-progress edit of the rest of the settings.
+      operationId: put-settings-layout
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LayoutBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Persist only the panel layout geometry
       tags:
         - settings
   /v1/traffic:

@@ -29,6 +29,54 @@ import { renderTopbar } from "./topbar";
 
 type VKind = keyof typeof versions;
 
+// Region dispose protocol (§4.3.3). A module that wires document-level
+// listeners, timers, or other resources that outlive a DOM subtree can register
+// a cleanup callback on the element it owns via registerDispose(el, fn). Before
+// the region framework discards an old element (replaceWith / fullRender) it
+// calls runDispose() on the region root, which cleans up that root AND any
+// registered descendant.
+//
+// WeakMap itself can't be queried by subtree, so registerDispose also tags the
+// element with a marker attribute; runDispose uses that marker to find
+// registered descendants of a discarded region root. This keeps the callback
+// data off the DOM (in the WeakMap) while still allowing subtree discovery, so
+// a deeply-nested widget (e.g. a custom <select> inside the filter bar) is
+// cleaned up when its enclosing region is rebuilt — without each region builder
+// having to thread the registry through.
+const disposers = new WeakMap<HTMLElement, () => void>();
+const DISPOSE_MARK = "data-dispose";
+
+export function registerDispose(el: HTMLElement, fn: () => void) {
+  const prev = disposers.get(el);
+  // Compose so repeated registrations on the same element all run.
+  disposers.set(el, prev ? () => {
+    prev();
+    fn();
+  } : fn);
+  el.setAttribute(DISPOSE_MARK, "");
+}
+
+function disposeOne(el: HTMLElement) {
+  const fn = disposers.get(el);
+  if (!fn) return;
+  disposers.delete(el);
+  el.removeAttribute(DISPOSE_MARK);
+  try {
+    fn();
+  } catch {
+    // A faulty disposer must not abort the render pass.
+  }
+}
+
+function runDispose(el: HTMLElement) {
+  // Descendants first, then the root, so a parent's cleanup never depends on a
+  // child still being live.
+  for (const child of el.querySelectorAll<HTMLElement>(`[${DISPOSE_MARK}]`)) {
+    disposeOne(child);
+  }
+  disposeOne(el);
+}
+
 interface Region {
   deps: VKind[];
   build: () => HTMLElement;
@@ -81,14 +129,20 @@ export function mountApp(root: HTMLElement) {
     const isMac = state.env?.platform === "darwin";
 
     const titlebar = region(["ui"], renderTitlebar);
-    const topbar = region(["ui"], renderTopbar);
+    // topbar shows the proxy chip + connect toggle (proxy slice) and the replay
+    // button (sel: enabled only when an entry is selected).
+    const topbar = region(["proxy", "sel"], renderTopbar);
 
     let mainChild: HTMLElement;
     if (state.view === "settings") {
       mainChild = region(["ui"], renderSettings);
     } else {
-      const sidebar = region(["struct", "sel", "ui"], renderSidebar);
-      const filterPills = region(["struct", "ui"], renderFilterPills);
+      // sidebar: list structure (struct), the active filter (filters), the
+      // selected entry (sel), and the expanded/rename chrome (ui).
+      const sidebar = region(["struct", "sel", "ui", "filters"], renderSidebar);
+      // filter bar: distinct models + visible count come off the entry list
+      // (struct); the pills reflect the active filter (filters).
+      const filterPills = region(["struct", "filters"], renderFilterPills);
       const timeline = region(["sel", "ui"], renderTimeline);
       // bottom-pane (console/problems) reads meta fields (token sub-lines,
       // warningCount, hasResponseError) so it must rebuild on meta ticks too.
@@ -98,7 +152,9 @@ export function mountApp(root: HTMLElement) {
       mainChild = h("div.view-traffic", null, sidebar, center, detail);
     }
 
-    const statusbar = region(["struct", "meta", "ui"], renderStatusbar);
+    // statusbar: entry count + byte/token totals (struct/meta), settings cog
+    // active state (ui), and the proxy + SSE connection indicators (proxy).
+    const statusbar = region(["struct", "meta", "ui", "proxy"], renderStatusbar);
 
     shellEl = h(
       "div",
@@ -133,6 +189,10 @@ export function mountApp(root: HTMLElement) {
   }
 
   function fullRender() {
+    // Dispose the outgoing regions (document listeners, timers) before the old
+    // tree is torn down — a full rebuild (view switch / language change) would
+    // otherwise leak whatever the discarded subtrees registered.
+    for (const r of regions) runDispose(r.el);
     clear(root);
     root.appendChild(buildShell());
     lastView = getState().view;
@@ -164,6 +224,9 @@ export function mountApp(root: HTMLElement) {
       // (empty ↔ filled) so we fall back to a full replace.
       if (r.reconcile?.(r.el, next)) continue;
       const snap = snapshotScrolls(r.el);
+      // Let the outgoing subtree clean up (document listeners, timers) before
+      // it leaves the DOM — see registerDispose.
+      runDispose(r.el);
       r.el.replaceWith(next);
       restoreScrolls(next, snap);
       r.el = next;
@@ -215,11 +278,18 @@ function reconcileDetail(oldEl: HTMLElement, newEl: HTMLElement): boolean {
   if (!oldBody || !newBody || !oldHead || !newHead || !oldTabs || !newTabs) {
     return false;
   }
+  runDispose(oldHead);
   oldHead.replaceWith(newHead);
+  runDispose(oldTabs);
   oldTabs.replaceWith(newTabs);
   // Preserve the scroll position across an in-place body refresh — e.g.
   // expanding a timeline message bumps `sel`, which also rebuilds detail.
   const top = oldBody.scrollTop;
+  // Dispose anything the outgoing body registered (e.g. a custom select) before
+  // we drop its children — clear() doesn't trigger the region replace path.
+  for (const child of oldBody.querySelectorAll<HTMLElement>(`[${DISPOSE_MARK}]`)) {
+    disposeOne(child);
+  }
   clear(oldBody);
   while (newBody.firstChild) oldBody.appendChild(newBody.firstChild);
   oldBody.scrollTop = top;

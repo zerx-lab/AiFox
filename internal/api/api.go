@@ -90,6 +90,17 @@ func Register(api huma.API, deps Deps) {
 	}, putSettingsHandler(deps.Config, deps.Proxy))
 
 	huma.Register(api, huma.Operation{
+		OperationID: "put-settings-layout",
+		Method:      http.MethodPut,
+		Path:        "/v1/settings/layout",
+		Summary:     "Persist only the panel layout geometry",
+		Description: "Updates the colLeft / colRight / bottomHeight fields in " +
+			"isolation (read-modify-write), so a resize-drag save never clobbers " +
+			"an in-progress edit of the rest of the settings.",
+		Tags: []string{"settings"},
+	}, putLayoutHandler(deps.Config))
+
+	huma.Register(api, huma.Operation{
 		OperationID: "get-proxy-info",
 		Method:      http.MethodGet,
 		Path:        "/v1/proxy",
@@ -185,6 +196,15 @@ type SettingsBody struct {
 	ProxyPort       int            `json:"proxyPort" minimum:"1" maximum:"65535" doc:"Fixed loopback port the proxy binds to"`
 	Language        string         `json:"language" enum:",en,zh-CN" doc:"UI language code; empty means follow OS"`
 	Theme           string         `json:"theme" enum:",dark,light" doc:"UI color scheme; empty means follow OS"`
+	Layout          LayoutBody     `json:"layout" doc:"Persisted panel geometry (px). Zero on a field means use the stylesheet default."`
+}
+
+// LayoutBody mirrors config.Layout on the wire — the renderer's dragged panel
+// geometry. Zero on any field means "not set" (use the responsive default).
+type LayoutBody struct {
+	ColLeft      int `json:"colLeft" doc:"Sidebar width in px (0 = default)"`
+	ColRight     int `json:"colRight" doc:"Detail panel width in px (0 = default)"`
+	BottomHeight int `json:"bottomHeight" doc:"Bottom pane height in px (0 = default)"`
 }
 
 func wireSettings(s config.Settings) SettingsBody {
@@ -201,6 +221,11 @@ func wireSettings(s config.Settings) SettingsBody {
 		ProxyPort:       s.ProxyPort,
 		Language:        string(s.Language),
 		Theme:           string(s.Theme),
+		Layout: LayoutBody{
+			ColLeft:      s.Layout.ColLeft,
+			ColRight:     s.Layout.ColRight,
+			BottomHeight: s.Layout.BottomHeight,
+		},
 	}
 }
 
@@ -221,6 +246,11 @@ func fromWireSettings(b SettingsBody) config.Settings {
 		ProxyPort:       b.ProxyPort,
 		Language:        config.Language(b.Language),
 		Theme:           config.Theme(b.Theme),
+		Layout: config.Layout{
+			ColLeft:      b.Layout.ColLeft,
+			ColRight:     b.Layout.ColRight,
+			BottomHeight: b.Layout.BottomHeight,
+		},
 	}
 }
 
@@ -260,6 +290,28 @@ func putSettingsHandler(cfg *config.Store, prox ProxyController) func(context.Co
 			}
 		}
 		return &GetSettingsOutput{Body: wireSettings(updated)}, nil
+	}
+}
+
+type PutLayoutInput struct {
+	Body LayoutBody
+}
+
+// putLayoutHandler persists ONLY the layout geometry. It exists as a separate
+// endpoint from PUT /v1/settings so the renderer's resize-drag save (debounced
+// on mouseup) can't race with — and overwrite — a settings form the user is
+// editing: config.SetLayout does a locked read-modify-write of just the Layout
+// sub-struct.
+func putLayoutHandler(cfg *config.Store) func(context.Context, *PutLayoutInput) (*GetSettingsOutput, error) {
+	return func(_ context.Context, in *PutLayoutInput) (*GetSettingsOutput, error) {
+		if err := cfg.SetLayout(config.Layout{
+			ColLeft:      in.Body.ColLeft,
+			ColRight:     in.Body.ColRight,
+			BottomHeight: in.Body.BottomHeight,
+		}); err != nil {
+			return nil, huma.Error500InternalServerError("persist layout: " + err.Error())
+		}
+		return &GetSettingsOutput{Body: wireSettings(cfg.Get())}, nil
 	}
 }
 
