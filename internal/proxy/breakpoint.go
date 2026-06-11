@@ -62,6 +62,13 @@ type Decision int
 const (
 	DecisionContinue Decision = iota
 	DecisionAbort
+	// DecisionClientGone is returned when a held request's context is cancelled
+	// (the inbound client disconnected) before the user resolved the
+	// breakpoint. It is distinct from DecisionAbort, which is a deliberate
+	// user/registry action: the proxy treats DecisionClientGone as a normal
+	// client disconnect (no error recorded, nothing written to the dead
+	// connection), mirroring isClientAbort in the streaming path.
+	DecisionClientGone
 )
 
 type heldRequest struct {
@@ -303,8 +310,8 @@ func (r *Registry) Match(req *http.Request) *Breakpoint {
 }
 
 // Hold registers a pause for entryID and blocks until either the user
-// resolves it or ctx is cancelled (client abort). Returns the final
-// Decision; on ctx cancellation returns DecisionAbort.
+// resolves it or ctx is cancelled (client disconnected). Returns the final
+// Decision; on ctx cancellation returns DecisionClientGone.
 func (r *Registry) Hold(ctx context.Context, bpID, entryID, method, url string) Decision {
 	hr := &heldRequest{
 		entryID:      entryID,
@@ -331,7 +338,7 @@ func (r *Registry) Hold(ctx context.Context, bpID, entryID, method, url string) 
 		}
 		r.mu.Unlock()
 		r.notify()
-		return DecisionAbort
+		return DecisionClientGone
 	}
 }
 

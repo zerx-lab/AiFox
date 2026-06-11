@@ -155,3 +155,39 @@ func TestNextIDIsMonotonic(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// TestEvictClearsPersistedAndIDIndex guards G4: when the ring buffer evicts an
+// entry, both idIndex and the persisted-dedup marker must be cleared so neither
+// map grows without bound on a long-running process.
+func TestEvictClearsPersistedAndIDIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "traffic.jsonl")
+	s, err := NewPersistent(2, path)
+	if err != nil {
+		t.Fatalf("new persistent: %v", err)
+	}
+	finalized := func(id string) *Entry {
+		e := newEntry(id)
+		e.EndedAt = time.Now() // mark finalized so it persists (and gets a marker)
+		return e
+	}
+	s.Add(finalized("a"))
+	s.Add(finalized("b"))
+	s.Add(finalized("c")) // evicts a
+
+	s.mu.RLock()
+	_, idxOK := s.idIndex["a"]
+	_, persistOK := s.persisted["a"]
+	idxLen := len(s.idIndex)
+	persistLen := len(s.persisted)
+	s.mu.RUnlock()
+
+	if idxOK {
+		t.Fatalf("idIndex should not retain evicted entry a")
+	}
+	if persistOK {
+		t.Fatalf("persisted should not retain evicted entry a")
+	}
+	if idxLen != 2 || persistLen != 2 {
+		t.Fatalf("maps should track only live entries, got idIndex=%d persisted=%d", idxLen, persistLen)
+	}
+}

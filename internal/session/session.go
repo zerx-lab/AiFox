@@ -67,8 +67,14 @@ type Summary struct {
 // was dropped on a full subscribe channel (the cause of the harness's 6/8
 // under-aggregation).
 const (
-	flushInterval     = 80 * time.Millisecond
-	reconcileInterval = 1 * time.Second
+	// FlushInterval and ReconcileInterval are exported so the API layer's index
+	// stream can share the exact same coalescing cadence instead of duplicating
+	// the constants (the two streams are tuned together).
+	FlushInterval     = 80 * time.Millisecond
+	ReconcileInterval = 1 * time.Second
+
+	flushInterval     = FlushInterval
+	reconcileInterval = ReconcileInterval
 )
 
 // Aggregator builds and maintains sessions from a store fan-out.
@@ -224,7 +230,10 @@ func (a *Aggregator) flushDirty() {
 //     every still-unfinished session dirty so the next flush recomputes it from
 //     store truth (where EndedAt is now set) and flips it to completed.
 func (a *Aggregator) reconcile() {
-	for _, e := range a.st.List() {
+	entries := a.st.List()
+	live := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		live[e.ID] = struct{}{}
 		a.mu.RLock()
 		_, known := a.byEntry[e.ID]
 		a.mu.RUnlock()
@@ -234,12 +243,41 @@ func (a *Aggregator) reconcile() {
 		a.consume(e)
 	}
 	a.mu.Lock()
+	// Prune entry-id bookkeeping for entries the store has since evicted. byEntry
+	// would otherwise grow without bound on a long-running process (the store's
+	// ring buffer drops old entries but the aggregator never heard about it). We
+	// keep the session itself (the UI list is keyed by session, not entry) and
+	// only trim it to live entries so its EntryIDs/rollup stay bounded by the
+	// store capacity. A session that loses all its entries is left in place with
+	// its last computed rollup — harmless and avoids reshuffling the sidebar.
+	for eid := range a.byEntry {
+		if _, ok := live[eid]; ok {
+			continue
+		}
+		sid := a.byEntry[eid]
+		delete(a.byEntry, eid)
+		if s := a.sessions[sid]; s != nil {
+			s.EntryIDs = filterLive(s.EntryIDs, live)
+			a.dirty[sid] = struct{}{}
+		}
+	}
 	for sid, s := range a.sessions {
 		if s.HasUnfinished {
 			a.dirty[sid] = struct{}{}
 		}
 	}
 	a.mu.Unlock()
+}
+
+// filterLive returns the subset of ids still present in live, preserving order.
+func filterLive(ids []string, live map[string]struct{}) []string {
+	out := ids[:0:0]
+	for _, id := range ids {
+		if _, ok := live[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Subscribe returns a channel that gets pinged after each session update.

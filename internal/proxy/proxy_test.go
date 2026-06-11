@@ -1,12 +1,15 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,13 +32,15 @@ func newConfig(t *testing.T, settings config.Settings) *config.Store {
 
 func startProxy(t *testing.T, cfg *config.Store, st *store.Store) string {
 	t.Helper()
-	p, err := New(0, cfg, st)
+	ctrl, err := NewController(0, cfg, st)
 	if err != nil {
-		t.Fatalf("proxy new: %v", err)
+		t.Fatalf("controller new: %v", err)
 	}
-	t.Cleanup(p.Close)
-	go func() { _ = p.Serve() }()
-	return "http://" + p.Addr().String()
+	if err := ctrl.Start(); err != nil {
+		t.Fatalf("controller start: %v", err)
+	}
+	t.Cleanup(ctrl.Close)
+	return "http://" + ctrl.Address()
 }
 
 func TestAnthropicPresetInjectsXApiKey(t *testing.T) {
@@ -229,7 +234,7 @@ func TestStreamingResponseIsCaptured(t *testing.T) {
 // the proxy must run llmparse on a partial body during the stream (the first
 // chunk always triggers an analysis) so a structured view exists before EOF.
 // In-stream re-analysis now fires on geometric size thresholds rather than a
-// fixed time interval (see captureAndStream), but the first-chunk analysis that
+// fixed time interval (see capture), but the first-chunk analysis that
 // this test asserts is unchanged.
 func TestStreamingAnalysisAppearsBeforeEnd(t *testing.T) {
 	gate := make(chan struct{})
@@ -470,5 +475,145 @@ func TestControllerSetPortRebinds(t *testing.T) {
 	}
 	if !ctrl.Enabled() {
 		t.Fatalf("controller should still be running after port change")
+	}
+}
+
+// TestLargeRequestBodyForwardedInFull guards G1: a >1MiB request body must be
+// forwarded to the upstream in full (the capture copy is truncated separately).
+// The upstream asserts it received every byte and a matching Content-Length.
+func TestLargeRequestBodyForwardedInFull(t *testing.T) {
+	const size = (1 << 20) + 4096 // just over store.MaxBodyBytes
+	payload := strings.Repeat("a", size)
+
+	type recv struct {
+		n             int
+		contentLength int64
+		match         bool
+	}
+	got := make(chan recv, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- recv{n: len(b), contentLength: r.ContentLength, match: string(b) == payload}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	st := store.New(4)
+	cfg := newConfig(t, config.Settings{UpstreamBaseURL: upstream.URL})
+	addr := startProxy(t, cfg, st)
+
+	resp, err := http.Post(addr+"/v1/messages", "application/json", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	select {
+	case r := <-got:
+		if r.n != size {
+			t.Fatalf("upstream received %d bytes, want full %d", r.n, size)
+		}
+		if !r.match {
+			t.Fatalf("forwarded body does not match original")
+		}
+		if r.contentLength != int64(size) {
+			t.Fatalf("Content-Length %d != body size %d", r.contentLength, size)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream never received the request")
+	}
+
+	// The captured copy is truncated and flagged, but forwarding stayed whole.
+	time.Sleep(50 * time.Millisecond)
+	entries := st.List()
+	if len(entries) != 1 {
+		t.Fatalf("want 1 entry, got %d", len(entries))
+	}
+	if !entries[0].Truncated {
+		t.Fatalf("capture copy of an over-limit body should be flagged Truncated")
+	}
+	if entries[0].RequestSize != int64(size) {
+		t.Fatalf("RequestSize should reflect the full body size %d, got %d", size, entries[0].RequestSize)
+	}
+}
+
+// TestGzipResponseDecoded guards G2: an upstream that ignores identity and
+// returns gzip is decoded by the proxy; the client sees plain text and the
+// Content-Encoding / Content-Length headers are removed.
+func TestGzipResponseDecoded(t *testing.T) {
+	const plain = "hello gzipped world"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		_, _ = zw.Write([]byte(plain))
+		_ = zw.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+		w.WriteHeader(200)
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer upstream.Close()
+
+	st := store.New(4)
+	cfg := newConfig(t, config.Settings{UpstreamBaseURL: upstream.URL})
+	addr := startProxy(t, cfg, st)
+
+	resp, err := http.Get(addr + "/v1/models")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	if string(body) != plain {
+		t.Fatalf("client should receive decoded body, got %q", body)
+	}
+	if ce := resp.Header.Get("Content-Encoding"); ce != "" {
+		t.Fatalf("Content-Encoding should be stripped after decode, got %q", ce)
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		t.Fatalf("Content-Length should be stripped after decode, got %q", cl)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	entries := st.List()
+	if len(entries) != 1 || !strings.Contains(entries[0].ResponseBody, plain) {
+		t.Fatalf("captured body should be decoded text, got %+v", entries)
+	}
+}
+
+// TestConnectionHeaderHopByHopStripped guards the RFC 7230 §6.1 upgrade: a
+// header named in the request's Connection header must not be forwarded.
+func TestConnectionHeaderHopByHopStripped(t *testing.T) {
+	type recv struct{ xFoo, connection string }
+	got := make(chan recv, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- recv{xFoo: r.Header.Get("X-Foo"), connection: r.Header.Get("Connection")}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	cfg := newConfig(t, config.Settings{UpstreamBaseURL: upstream.URL})
+	addr := startProxy(t, cfg, store.New(2))
+
+	req, _ := http.NewRequest(http.MethodGet, addr+"/v1/models", nil)
+	req.Header.Set("X-Foo", "secret")
+	req.Header.Set("Connection", "X-Foo")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	select {
+	case r := <-got:
+		if r.xFoo != "" {
+			t.Fatalf("X-Foo named in Connection must be stripped, got %q", r.xFoo)
+		}
+		if r.connection != "" {
+			t.Fatalf("Connection header must be stripped, got %q", r.connection)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream never received the request")
 	}
 }

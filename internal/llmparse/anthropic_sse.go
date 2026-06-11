@@ -242,6 +242,12 @@ type sseEvent struct {
 // separated by blank lines; within an event each `data:` line is concatenated
 // (with `\n` joining) per the spec.
 func splitSSE(body string) []sseEvent {
+	// Normalize CRLF (and lone CR) line endings to LF before framing. Some
+	// intermediaries rewrite SSE streams to \r\n; without this every parsed
+	// event name / data line keeps a trailing \r and the whole stream fails to
+	// match the expected event types (SSE spec §9.2 treats CRLF/CR/LF alike).
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = strings.ReplaceAll(body, "\r", "\n")
 	chunks := strings.Split(body, "\n\n")
 	out := make([]sseEvent, 0, len(chunks))
 	for _, chunk := range chunks {

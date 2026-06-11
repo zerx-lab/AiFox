@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -98,25 +97,16 @@ func (c *Controller) Replay(ctx context.Context, originalID string, overrides Re
 		})
 		return entry.ID, err
 	}
-	// Copy original client headers minus hop-by-hop ones and auth (we apply
-	// the current preset so a rotated key is honored).
-	for k, v := range original.RequestHeaders {
-		if _, drop := hopByHopHeaders[http.CanonicalHeaderKey(k)]; drop {
-			continue
-		}
-		if isAuthHeader(k) {
-			continue
-		}
-		// Drop the client's session-affinity header: the replay is a fresh
-		// session (keyed by ReplayedFromID in the aggregator), and forwarding a
-		// stale sticky-routing token upstream serves no purpose.
-		if http.CanonicalHeaderKey(k) == "X-Session-Affinity" {
-			continue
-		}
-		req.Header.Set(k, v)
+	// Build forwarding headers from the original capture, then drop the bits a
+	// replay must not echo: the captured auth (we re-inject the current preset so
+	// a rotated key is honored) and the client's session-affinity header (the
+	// replay is a fresh session keyed by ReplayedFromID in the aggregator).
+	src := mapToHeader(original.RequestHeaders)
+	for _, k := range append(authHeaderNames(), "X-Session-Affinity") {
+		src.Del(k)
 	}
-	req.Header.Set("Accept-Encoding", "identity")
-	injectAuth(req, settings)
+	buildForwardHeaders(req.Header, src, target.Host, settings)
+	req.Host = target.Host
 
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
@@ -135,12 +125,16 @@ func (c *Controller) Replay(ctx context.Context, originalID string, overrides Re
 		e.Streaming = isStreaming(resp.Header)
 	})
 
-	captureToStore(ctx, resp.Body, entry.ID, prox.store)
+	bodyReader, encodingWarning := decodeResponseBody(resp)
+	capture(ctx, bodyReader, entry.ID, prox.store, nil)
 
 	prox.store.Update(entry.ID, func(e *store.Entry) {
 		e.EndedAt = time.Now()
 		e.DurationMillis = e.EndedAt.Sub(started).Milliseconds()
 		runAnalysis(e)
+		if encodingWarning != "" {
+			appendWarning(e, encodingWarning)
+		}
 	})
 	return entry.ID, nil
 }
@@ -199,71 +193,19 @@ func copyHeaderMap(h map[string]string) map[string]string {
 	return out
 }
 
-func isAuthHeader(k string) bool {
-	lk := http.CanonicalHeaderKey(k)
-	switch lk {
-	case "Authorization", "X-Api-Key", "Anthropic-Version":
-		return true
-	}
-	return false
+// authHeaderNames lists the header keys whose captured values must be dropped on
+// replay so the current auth preset (a possibly-rotated key) is re-injected
+// rather than the stale captured credential.
+func authHeaderNames() []string {
+	return []string{"Authorization", "X-Api-Key", "Anthropic-Version"}
 }
 
-// captureToStore mirrors captureAndStream's append behavior but writes only
-// to the store (no client connection to push to during a replay).
-func captureToStore(ctx context.Context, body io.Reader, entryID string, st *store.Store) {
-	buf := make([]byte, 32*1024)
-	var captured bytes.Buffer
-	totalBytes := int64(0)
-	truncated := false
-	// Geometric size-doubling analysis trigger, same as captureAndStream: bounds
-	// total in-stream parse work to O(size) instead of O(size × duration).
-	var nextAnalyzeLen int
-
-	for {
-		n, err := body.Read(buf)
-		if n > 0 {
-			totalBytes += int64(n)
-			remaining := int64(store.MaxBodyBytes) - int64(captured.Len())
-			switch {
-			case remaining <= 0:
-				truncated = true
-			case int64(n) > remaining:
-				captured.Write(buf[:remaining])
-				truncated = true
-			default:
-				captured.Write(buf[:n])
-			}
-			shouldAnalyze := captured.Len() >= nextAnalyzeLen
-			if shouldAnalyze {
-				nextAnalyzeLen = captured.Len() * 2
-				if nextAnalyzeLen < firstAnalyzeBytes {
-					nextAnalyzeLen = firstAnalyzeBytes
-				}
-			}
-			snapshot := captured.String()
-			st.Update(entryID, func(e *store.Entry) {
-				e.ResponseBody = snapshot
-				e.ResponseSize = totalBytes
-				if truncated {
-					e.Truncated = true
-				}
-				if shouldAnalyze {
-					runAnalysis(e)
-				}
-			})
-		}
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			st.Update(entryID, func(e *store.Entry) {
-				if !isClientAbort(ctx, err) {
-					e.Error = "read replay upstream: " + err.Error()
-				}
-				e.ResponseBody = captured.String()
-				e.ResponseSize = totalBytes
-			})
-			return
-		}
+// mapToHeader rebuilds an http.Header from a captured single-value-per-key map
+// so the shared buildForwardHeaders path can operate on it.
+func mapToHeader(m map[string]string) http.Header {
+	h := make(http.Header, len(m))
+	for k, v := range m {
+		h.Set(k, v)
 	}
+	return h
 }

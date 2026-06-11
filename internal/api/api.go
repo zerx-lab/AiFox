@@ -610,10 +610,11 @@ func registerTrafficStream(api huma.API, st *store.Store, agg *session.Aggregato
 // ~12 list updates/sec/entry instead of one per 32 KiB chunk. reconcileInterval
 // backstops the store fan-out's drop-on-full: a finalize broadcast that was
 // dropped under load is recovered here so an entry never stays "streaming"
-// forever (the meta-only design removed the old polling fallback).
+// forever (the meta-only design removed the old polling fallback). The values
+// are shared with the session aggregator (the two streams are tuned together).
 const (
-	flushInterval     = 80 * time.Millisecond
-	reconcileInterval = 1 * time.Second
+	flushInterval     = session.FlushInterval
+	reconcileInterval = session.ReconcileInterval
 )
 
 // writeTrafficStream pushes events as the store/aggregator emit updates.

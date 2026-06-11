@@ -149,13 +149,17 @@ func (c *Controller) startLocked() error {
 	if err != nil {
 		return fmt.Errorf("bind %s: %w", addr, err)
 	}
-	p, err := newWithListener(ln, c.cfg, c.store, c.breakpoints)
+	p, err := newProxy(c.cfg, c.store, c.breakpoints)
 	if err != nil {
 		_ = ln.Close()
 		return err
 	}
+	srv := &http.Server{
+		Handler:           p,
+		ReadHeaderTimeout: 30 * time.Second,
+	}
 	c.listener = ln
-	c.server = p.server
+	c.server = srv
 	c.proxy = p
 	// When the caller passed port 0 the OS picked a real port at bind time;
 	// surface it so Address() / Port() stay accurate while running.
@@ -164,7 +168,14 @@ func (c *Controller) startLocked() error {
 			c.port = tcp.Port
 		}
 	}
-	go func() { _ = p.Serve() }()
+	go func() {
+		if serr := srv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+			// Best-effort: a serve error after a clean Shutdown is expected and
+			// ignored; anything else has nowhere useful to surface in this
+			// debug tool, so we drop it rather than crash the process.
+			_ = serr
+		}
+	}()
 	return nil
 }
 

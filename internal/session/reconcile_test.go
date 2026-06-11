@@ -68,3 +68,46 @@ func TestReconcileHealsStuckActiveAfterDroppedFinalize(t *testing.T) {
 		t.Fatalf("session not healed: status=%q hasUnfinished=%v", s[0].Status, s[0].HasUnfinished)
 	}
 }
+
+// TestReconcilePrunesEvictedEntriesFromByEntry guards G4 (session side): once the
+// store's ring buffer evicts an entry, reconcile must drop it from byEntry so the
+// map stays bounded by the store capacity, and trim the owning session's EntryIDs.
+func TestReconcilePrunesEvictedEntriesFromByEntry(t *testing.T) {
+	st := store.New(2) // tiny ring buffer to force eviction
+	agg := New(st, "")
+
+	// Three distinct entries; the store retains only the last two.
+	for _, id := range []string{"e-1", "e-2", "e-3"} {
+		e := streamingEntry(id)
+		st.Add(e)
+		got, _ := st.Get(id)
+		if got != nil {
+			agg.consume(got)
+		}
+	}
+	agg.flushDirty()
+
+	// e-1 has been evicted from the store but consume recorded it in byEntry.
+	if _, ok := st.Get("e-1"); ok {
+		t.Fatal("precondition: e-1 should have been evicted from the store")
+	}
+
+	agg.reconcile()
+	agg.flushDirty()
+
+	agg.mu.RLock()
+	defer agg.mu.RUnlock()
+	if _, stillThere := agg.byEntry["e-1"]; stillThere {
+		t.Fatal("reconcile must prune evicted entry e-1 from byEntry")
+	}
+	if len(agg.byEntry) != 2 {
+		t.Fatalf("byEntry should track only the 2 live entries, got %d", len(agg.byEntry))
+	}
+	for _, s := range agg.sessions {
+		for _, eid := range s.EntryIDs {
+			if eid == "e-1" {
+				t.Fatalf("session %s still references evicted entry e-1", s.ID)
+			}
+		}
+	}
+}

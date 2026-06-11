@@ -161,6 +161,11 @@ func (s *Store) Add(e *Entry) {
 		evicted := s.entries[0]
 		s.entries = s.entries[1:]
 		delete(s.idIndex, evicted.ID)
+		// Drop the persisted-dedup marker too, otherwise this map grows without
+		// bound over the lifetime of a long-running desktop process even though
+		// the entry is no longer retained. The on-disk JSONL line stays (the
+		// file is the durable record); only the in-memory dedup hint is cleared.
+		delete(s.persisted, evicted.ID)
 	}
 	s.entries = append(s.entries, e)
 	s.idIndex[e.ID] = e
