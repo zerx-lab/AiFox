@@ -35,6 +35,7 @@ type SessionSummaryBody struct {
 	OutputTokens  int       `json:"outputTokens"`
 	CacheRead     int       `json:"cacheRead"`
 	CacheCreate   int       `json:"cacheCreate"`
+	Cost          float64   `json:"cost" doc:"Estimated USD cost across the session, from the built-in pricing table."`
 	Status        string    `json:"status" enum:"active,completed,failed"`
 	HasError      bool      `json:"hasError"`
 	HasStreaming  bool      `json:"hasStreaming"`
@@ -57,6 +58,7 @@ func toSessionBody(s *session.Summary) SessionSummaryBody {
 		OutputTokens:  s.OutputTokens,
 		CacheRead:     s.CacheRead,
 		CacheCreate:   s.CacheCreate,
+		Cost:          s.Cost,
 		Status:        s.Status,
 		HasError:      s.HasError,
 		HasStreaming:  s.HasStreaming,

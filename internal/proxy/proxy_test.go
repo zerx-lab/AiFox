@@ -91,6 +91,36 @@ func TestAnthropicPresetInjectsXApiKey(t *testing.T) {
 	}
 }
 
+func TestAnthropicVersionPassthroughWhenClientSendsOne(t *testing.T) {
+	var capturedVersion string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedVersion = r.Header.Get("anthropic-version")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	cfg := newConfig(t, config.Settings{
+		UpstreamBaseURL: upstream.URL,
+		UpstreamAPIKey:  "sk-test",
+		AuthPreset:      config.PresetAnthropic,
+	})
+	addr := startProxy(t, cfg, store.New(2))
+
+	req, err := http.NewRequest(http.MethodPost, addr+"/v1/messages", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("anthropic-version", "2099-12-31")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	_ = resp.Body.Close()
+	if capturedVersion != "2099-12-31" {
+		t.Fatalf("client anthropic-version must pass through, got %q", capturedVersion)
+	}
+}
+
 func TestOpenAIPresetInjectsBearer(t *testing.T) {
 	var captured string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

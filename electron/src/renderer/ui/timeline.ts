@@ -123,7 +123,15 @@ function renderHeader(entry: TrafficEntry): HTMLElement {
   const resp = anth?.response;
   const usage = resp?.usage;
 
-  const model = req?.model || resp?.model || "—";
+  // Model falls back across providers: Anthropic request/response, then OpenAI,
+  // so OpenAI entries show a model in the header instead of a dash.
+  const oai = analysis?.openai;
+  const model =
+    req?.model ||
+    resp?.model ||
+    oai?.response?.model ||
+    oai?.request?.model ||
+    "—";
 
   const chips: HTMLElement[] = [];
   chips.push(chip(req?.stream ? t("conversation.stream") : t("conversation.nonStream")));
@@ -242,15 +250,19 @@ function entryChip(target: EntryMeta, ordinal: number, active: boolean): HTMLEle
   );
 }
 
-function renderGeneric(entry: TrafficEntry, _analysis?: Analysis): HTMLElement {
+function renderGeneric(entry: TrafficEntry, analysis?: Analysis): HTMLElement {
+  // OpenAI entries are recognized but their rich structured view is M4; show a
+  // provider-aware hint so the user knows the parser saw it, plus the model.
+  const oai = analysis?.openai;
+  const hint = oai ? t("timeline.openaiPending") : t("timeline.noStructuredView");
+  const model = oai?.response?.model || oai?.request?.model || "";
   return h(
     "div.tl-generic",
     null,
-    h(
-      "div.banner.info",
-      null,
-      t("timeline.noStructuredView"),
-    ),
+    h("div.banner.info", null, hint),
+    model
+      ? h("div.tl-generic-row", null, h("dt", null, "Model"), h("dd", null, model))
+      : null,
     h("div.tl-generic-row", null, h("dt", null, "Method"), h("dd", null, entry.method)),
     h(
       "div.tl-generic-row",

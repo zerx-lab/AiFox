@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/zerx-lab/ai-fox/internal/llmparse"
+	"github.com/zerx-lab/ai-fox/internal/pricing"
 	"github.com/zerx-lab/ai-fox/internal/store"
 )
 
@@ -43,20 +44,23 @@ type Summary struct {
 	// Model is the session's primary model — the most recent non-utility model
 	// seen. Models lists every distinct model used (primary first), so a mixed
 	// opus+haiku session can be shown as "opus·haiku" without losing the anchor.
-	Model         string    `json:"model,omitempty"`
-	Models        []string  `json:"models,omitempty"`
-	EntryIDs      []string  `json:"entryIds"`
-	StartedAt     time.Time `json:"startedAt"`
-	LastAt        time.Time `json:"lastAt"`
-	TurnCount     int       `json:"turnCount"`
-	InputTokens   int       `json:"inputTokens"`
-	OutputTokens  int       `json:"outputTokens"`
-	CacheRead     int       `json:"cacheRead"`
-	CacheCreate   int       `json:"cacheCreate"`
-	Status        string    `json:"status"`
-	HasError      bool      `json:"hasError"`
-	HasStreaming  bool      `json:"hasStreaming"`
-	HasUnfinished bool      `json:"hasUnfinished"`
+	Model        string    `json:"model,omitempty"`
+	Models       []string  `json:"models,omitempty"`
+	EntryIDs     []string  `json:"entryIds"`
+	StartedAt    time.Time `json:"startedAt"`
+	LastAt       time.Time `json:"lastAt"`
+	TurnCount    int       `json:"turnCount"`
+	InputTokens  int       `json:"inputTokens"`
+	OutputTokens int       `json:"outputTokens"`
+	CacheRead    int       `json:"cacheRead"`
+	CacheCreate  int       `json:"cacheCreate"`
+	// Cost is the estimated USD cost summed across the session's turns; 0 when
+	// no entry's model is in the pricing table.
+	Cost          float64 `json:"cost"`
+	Status        string  `json:"status"`
+	HasError      bool    `json:"hasError"`
+	HasStreaming  bool    `json:"hasStreaming"`
+	HasUnfinished bool    `json:"hasUnfinished"`
 }
 
 // Coalescing/reconcile cadence. Per-chunk recompute + notify was the second
@@ -581,6 +585,7 @@ type rollup struct {
 	model                           string
 	models                          []string
 	in, out, cr, cc                 int
+	cost                            float64
 	anyError, anyStream, unfinished bool
 }
 
@@ -625,26 +630,26 @@ func (a *Aggregator) computeRollup(entryIDs []string) rollup {
 		if ana.Normalized != nil && ana.Normalized.Provider != "" {
 			r.provider = ana.Normalized.Provider
 		}
-		if ana.Anthropic == nil {
+		// Only entries an analyzer recognized contribute turns/usage. This is
+		// provider-neutral: Anthropic, OpenAI, and any future analyzer all flow
+		// through Analysis.Usage / the normalized model below — the root cause of
+		// OpenAI sessions previously showing zero tokens (it only read
+		// ana.Anthropic.Response.Usage).
+		if ana.Anthropic == nil && ana.OpenAI == nil {
 			continue
 		}
 		utility := llmparse.IsUtilityRequest(ana)
 		if !utility {
 			r.turnCount++ // sub-task calls (title-gen/summaries) are not turns
 		}
-		model := ""
-		if req := ana.Anthropic.Request; req != nil {
-			model = req.Model
-		}
-		if resp := ana.Anthropic.Response; resp != nil {
-			if resp.Model != "" {
-				model = resp.Model
-			}
-			if u := resp.Usage; u != nil {
-				r.in += u.InputTokens
-				r.out += u.OutputTokens
-				r.cr += u.CacheReadInputTokens
-				r.cc += u.CacheCreationInputTokens
+		model := rollupModel(ana)
+		if u := ana.Usage; u != nil {
+			r.in += u.InputTokens
+			r.out += u.OutputTokens
+			r.cr += u.CacheReadTokens
+			r.cc += u.CacheWriteTokens
+			if cost, ok := pricing.Cost(model, *u); ok {
+				r.cost += cost
 			}
 		}
 		if model != "" {
@@ -664,6 +669,28 @@ func (a *Aggregator) computeRollup(entryIDs []string) rollup {
 		r.models = append([]string{r.model}, removeStr(r.models, r.model)...)
 	}
 	return r
+}
+
+// rollupModel returns an entry's model label from whichever provider analyzer
+// produced the analysis, preferring the response echo over the request.
+func rollupModel(ana *llmparse.Analysis) string {
+	if ana.Anthropic != nil {
+		if r := ana.Anthropic.Response; r != nil && r.Model != "" {
+			return r.Model
+		}
+		if req := ana.Anthropic.Request; req != nil {
+			return req.Model
+		}
+	}
+	if ana.OpenAI != nil {
+		if r := ana.OpenAI.Response; r != nil && r.Model != "" {
+			return r.Model
+		}
+		if req := ana.OpenAI.Request; req != nil {
+			return req.Model
+		}
+	}
+	return ""
 }
 
 func removeStr(xs []string, target string) []string {
@@ -691,6 +718,7 @@ func (r rollup) applyTo(s *Summary) {
 	}
 	s.Models = r.models
 	s.InputTokens, s.OutputTokens, s.CacheRead, s.CacheCreate = r.in, r.out, r.cr, r.cc
+	s.Cost = r.cost
 	s.HasError, s.HasStreaming, s.HasUnfinished = r.anyError, r.anyStream, r.unfinished
 	switch {
 	case r.anyError:

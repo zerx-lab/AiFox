@@ -493,6 +493,14 @@ func buildForwardHeaders(dst, src http.Header, host string, settings config.Sett
 		if kv.Name == "" {
 			continue
 		}
+		// anthropic-version is a default, not an override: when the client
+		// (Claude Code, the SDK, …) already sent its own version header, pass it
+		// through untouched. Only inject the preset default when it's absent.
+		// anthropic-beta is copied verbatim by copyHeaders above (never in the
+		// preset list), so client beta flags are always forwarded.
+		if strings.EqualFold(kv.Name, "anthropic-version") && src.Get("anthropic-version") != "" {
+			continue
+		}
 		dst.Set(kv.Name, kv.Value)
 	}
 }

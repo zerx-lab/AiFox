@@ -22,7 +22,10 @@ import "encoding/json"
 // Kind discriminates which analyzer produced an Analysis. New analyzers add
 // a new Kind constant and a new pointer field on Analysis.
 const (
-	KindAnthropicMessages = "anthropic.messages"
+	KindAnthropicMessages    = "anthropic.messages"
+	KindAnthropicCountTokens = "anthropic.count_tokens"
+	KindOpenAIChat           = "openai.chat"
+	KindOpenAICompletions    = "openai.completions"
 )
 
 // ReifyAnalysis coerces a value back into a *Analysis. Live entries already
@@ -67,7 +70,14 @@ func ReifyAnalysis(v any) *Analysis {
 // summaries) are single-shot and tool-less. A tool-less agent's real turns
 // would be misclassified, so this stays a heuristic, not a guarantee.
 func IsUtilityRequest(a *Analysis) bool {
-	if a == nil || a.Anthropic == nil || a.Anthropic.Request == nil {
+	if a == nil {
+		return false
+	}
+	// count_tokens is a pre-flight token estimate, never a conversation turn.
+	if a.Kind == KindAnthropicCountTokens {
+		return true
+	}
+	if a.Anthropic == nil || a.Anthropic.Request == nil {
 		return false
 	}
 	r := a.Anthropic.Request
@@ -87,10 +97,21 @@ type Analysis struct {
 	Endpoint string `json:"endpoint" doc:"Human-readable endpoint label"`
 	// Anthropic carries the parsed Messages-API view when Kind == anthropic.messages.
 	Anthropic *AnthropicAnalysis `json:"anthropic,omitempty"`
+	// OpenAI carries the parsed Chat-Completions view when Kind == openai.chat
+	// (and a minimal view for openai.completions).
+	OpenAI *OpenAIAnalysis `json:"openai,omitempty"`
 	// Normalized is the provider-neutral projection used by session
 	// aggregation. Every analyzer should populate this — it's what enables
 	// the UI to group requests across providers under a single session.
 	Normalized *NormalizedRequest `json:"normalized,omitempty"`
+	// Usage is the provider-neutral token accounting, populated by every
+	// analyzer from its provider-specific usage. Session rollups and pricing
+	// read this instead of branching per provider.
+	Usage *NormalizedUsage `json:"usage,omitempty"`
+	// StopReason is the normalized stop reason (see Stop* constants), and
+	// Error is the normalized provider error, when present.
+	StopReason string           `json:"stopReason,omitempty"`
+	Error      *NormalizedError `json:"error,omitempty"`
 	// Warnings collects soft parse failures: missing fields, unknown event
 	// types, JSON that didn't deserialize as expected. Always safe to show
 	// to the user — they're not blocking errors.
@@ -118,10 +139,39 @@ type AnthropicRequest struct {
 	ToolChoice    any                `json:"toolChoice,omitempty"`
 	Messages      []AnthropicMessage `json:"messages,omitempty"`
 	Metadata      any                `json:"metadata,omitempty"`
+	// Thinking is the structured extended-thinking config (type / budget_tokens)
+	// every Claude Code request now carries.
+	Thinking *AnthropicThinking `json:"thinking,omitempty"`
+	// Betas mirrors the request-body `betas` array (distinct from the
+	// anthropic-beta header).
+	Betas []string `json:"betas,omitempty"`
+	// ServiceTier mirrors the optional `service_tier` field.
+	ServiceTier string `json:"serviceTier,omitempty"`
 	// UnknownFields holds top-level keys we don't have a structured slot for
 	// yet. Renderer should show them verbatim with a "new field" hint so
 	// users know they're looking at something the parser doesn't model.
 	UnknownFields map[string]any `json:"unknownFields,omitempty"`
+}
+
+// AnthropicThinking is the request's extended-thinking configuration.
+type AnthropicThinking struct {
+	Type         string `json:"type,omitempty"`
+	BudgetTokens int    `json:"budgetTokens,omitempty"`
+}
+
+// AnthropicImage is the structured view of an image block's source. The base64
+// payload is never stored — only its decoded byte size (Bytes) is recorded.
+type AnthropicImage struct {
+	SourceType string `json:"sourceType,omitempty"`
+	MediaType  string `json:"mediaType,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Bytes      int    `json:"bytes,omitempty"`
+}
+
+// AnthropicCacheControl is the structured view of a cache_control annotation.
+type AnthropicCacheControl struct {
+	Type string `json:"type,omitempty"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 // AnthropicMessage is one role-tagged turn in the conversation.
@@ -145,6 +195,12 @@ type AnthropicBlock struct {
 	Content      any    `json:"content,omitempty"`
 	IsError      bool   `json:"isError,omitempty"`
 	CacheControl any    `json:"cacheControl,omitempty"`
+	// Cache is the structured cache_control annotation (type / ttl), parsed
+	// from CacheControl. CacheControl keeps the raw value for the JSON view.
+	Cache *AnthropicCacheControl `json:"cache,omitempty"`
+	// Image is the structured image source for image blocks (media_type / url /
+	// byte size), never the base64 payload.
+	Image *AnthropicImage `json:"image,omitempty"`
 	// Raw is the original JSON for blocks whose type the parser doesn't
 	// recognize. The renderer should pretty-print it in a fallback box.
 	Raw any `json:"raw,omitempty"`

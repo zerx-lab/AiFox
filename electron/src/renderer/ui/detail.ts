@@ -185,9 +185,12 @@ function overviewBody(entry: TrafficEntry): HTMLElement {
 
   const analysis = entry.analysis as Analysis | undefined;
   const usage = analysis?.anthropic?.response?.usage;
+  // Model falls back across providers so OpenAI entries show a model too.
   const model =
     analysis?.anthropic?.request?.model ||
     analysis?.anthropic?.response?.model ||
+    analysis?.openai?.response?.model ||
+    analysis?.openai?.request?.model ||
     "—";
 
   const sessionPanel = renderSessionOverview(entry);

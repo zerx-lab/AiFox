@@ -28,8 +28,70 @@ type NormalizedRequest struct {
 	Model    string `json:"model,omitempty"`
 	// System is the concatenated text of every system block, joined with a
 	// newline. Used in the session fingerprint.
-	System   string              `json:"system,omitempty"`
+	System string `json:"system,omitempty"`
+	// Stream reports whether the request asked for a streamed response.
+	Stream   bool                `json:"stream,omitempty"`
 	Messages []NormalizedMessage `json:"messages,omitempty"`
+}
+
+// NormalizedUsage is the provider-neutral token accounting used by session
+// rollups and pricing. Each analyzer fills it from its provider-specific usage
+// so downstream consumers never branch on provider. CacheRead/CacheWrite map to
+// Anthropic's cache_read/cache_creation and OpenAI's prompt_tokens_details
+// cached tokens (OpenAI exposes no cache-write figure, so CacheWrite stays 0).
+type NormalizedUsage struct {
+	InputTokens      int `json:"inputTokens,omitempty"`
+	OutputTokens     int `json:"outputTokens,omitempty"`
+	CacheReadTokens  int `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int `json:"cacheWriteTokens,omitempty"`
+}
+
+// Normalized stop_reason values. Provider-specific reasons collapse onto this
+// small enum so the UI and rollups don't branch per provider.
+const (
+	StopEndTurn   = "end_turn"
+	StopToolUse   = "tool_use"
+	StopMaxTokens = "max_tokens"
+	StopStop      = "stop_sequence"
+	StopOther     = "other"
+)
+
+// normalizeStopReason maps a provider stop_reason onto the shared enum.
+// Anthropic: end_turn|tool_use|max_tokens|stop_sequence. OpenAI:
+// stop|tool_calls|length|function_call|content_filter.
+func normalizeStopReason(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "end_turn", "stop":
+		return StopEndTurn
+	case "tool_use", "tool_calls", "function_call":
+		return StopToolUse
+	case "max_tokens", "length":
+		return StopMaxTokens
+	case "stop_sequence":
+		return StopStop
+	case "":
+		return ""
+	default:
+		return StopOther
+	}
+}
+
+// NormalizedError is the provider-neutral error projection. Type/Code/Message
+// map onto whatever envelope the provider used (Anthropic error.type, OpenAI
+// error.type + error.code).
+type NormalizedError struct {
+	Type    string `json:"type,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// NormalizedToolCall is a provider-neutral projection of a single tool/function
+// call: a stable id, the tool name, and the arguments serialized as a JSON
+// string (the wire form both providers ultimately carry).
+type NormalizedToolCall struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // NormalizedMessage strips a single role-tagged message down to what session
@@ -83,6 +145,7 @@ func anthropicToNormalized(req *AnthropicRequest) *NormalizedRequest {
 		Provider: ProviderAnthropic,
 		Model:    req.Model,
 		System:   system,
+		Stream:   req.Stream,
 	}
 	for _, m := range req.Messages {
 		out.Messages = append(out.Messages, NormalizedMessage{

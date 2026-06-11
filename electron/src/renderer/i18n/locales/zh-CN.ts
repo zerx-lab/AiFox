@@ -149,6 +149,8 @@ export const zhCN: Dictionary = {
       "从左侧选一条已抓取的请求，这里会展示它的结构化时间线。原始 headers / body 请看右侧面板。",
     noStructuredView:
       "这条流量没有结构化视图，请在右侧的「请求 / 响应」标签查看原文。",
+    openaiPending:
+      "已识别为 OpenAI 请求。完整结构化视图即将上线，目前可在右侧「请求 / 响应」标签及上方的 token / 成本查看。",
   },
   settings: {
     title: "设置",

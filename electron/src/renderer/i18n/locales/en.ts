@@ -150,6 +150,8 @@ export const en = {
       "Choose a captured request on the left to see its structured timeline here. The right panel shows raw headers and bodies.",
     noStructuredView:
       "No structured timeline view for this endpoint — see Request / Response tabs on the right.",
+    openaiPending:
+      "OpenAI request recognized. The full structured view is coming soon — see Request / Response tabs and token/cost above.",
   },
   settings: {
     title: "Settings",

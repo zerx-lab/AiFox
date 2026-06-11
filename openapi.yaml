@@ -8,11 +8,19 @@ components:
         endpoint:
           description: Human-readable endpoint label
           type: string
+        error:
+          $ref: "#/components/schemas/NormalizedError"
         kind:
           description: Analyzer that produced this view
           type: string
         normalized:
           $ref: "#/components/schemas/NormalizedRequest"
+        openai:
+          $ref: "#/components/schemas/OpenAIAnalysis"
+        stopReason:
+          type: string
+        usage:
+          $ref: "#/components/schemas/NormalizedUsage"
         warnings:
           items:
             type: string
@@ -34,10 +42,14 @@ components:
     AnthropicBlock:
       additionalProperties: false
       properties:
+        cache:
+          $ref: "#/components/schemas/AnthropicCacheControl"
         cacheControl: {}
         content: {}
         id:
           type: string
+        image:
+          $ref: "#/components/schemas/AnthropicImage"
         input: {}
         isError:
           type: boolean
@@ -53,12 +65,33 @@ components:
       required:
         - type
       type: object
+    AnthropicCacheControl:
+      additionalProperties: false
+      properties:
+        ttl:
+          type: string
+        type:
+          type: string
+      type: object
     AnthropicError:
       additionalProperties: false
       properties:
         message:
           type: string
         type:
+          type: string
+      type: object
+    AnthropicImage:
+      additionalProperties: false
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        mediaType:
+          type: string
+        sourceType:
+          type: string
+        url:
           type: string
       type: object
     AnthropicMessage:
@@ -79,6 +112,12 @@ components:
     AnthropicRequest:
       additionalProperties: false
       properties:
+        betas:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         maxTokens:
           format: int64
           type: integer
@@ -90,6 +129,8 @@ components:
             - "null"
         metadata: {}
         model:
+          type: string
+        serviceTier:
           type: string
         stopSequences:
           items:
@@ -108,6 +149,8 @@ components:
         temperature:
           format: double
           type: number
+        thinking:
+          $ref: "#/components/schemas/AnthropicThinking"
         toolChoice: {}
         tools:
           items:
@@ -148,6 +191,15 @@ components:
           type: boolean
         usage:
           $ref: "#/components/schemas/AnthropicUsage"
+      type: object
+    AnthropicThinking:
+      additionalProperties: false
+      properties:
+        budgetTokens:
+          format: int64
+          type: integer
+        type:
+          type: string
       type: object
     AnthropicTool:
       additionalProperties: false
@@ -240,6 +292,9 @@ components:
         cacheRead:
           format: int64
           type: integer
+        cost:
+          format: double
+          type: number
         durationMillis:
           format: int64
           type: integer
@@ -478,6 +533,16 @@ components:
       required:
         - items
       type: object
+    NormalizedError:
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        type:
+          type: string
+      type: object
     NormalizedMessage:
       additionalProperties: false
       properties:
@@ -502,10 +567,184 @@ components:
           type: string
         provider:
           type: string
+        stream:
+          type: boolean
         system:
           type: string
       required:
         - provider
+      type: object
+    NormalizedUsage:
+      additionalProperties: false
+      properties:
+        cacheReadTokens:
+          format: int64
+          type: integer
+        cacheWriteTokens:
+          format: int64
+          type: integer
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+      type: object
+    OpenAIAnalysis:
+      additionalProperties: false
+      properties:
+        request:
+          $ref: "#/components/schemas/OpenAIRequest"
+        response:
+          $ref: "#/components/schemas/OpenAIResponse"
+      type: object
+    OpenAIChoice:
+      additionalProperties: false
+      properties:
+        finishReason:
+          type: string
+        index:
+          format: int64
+          type: integer
+        message:
+          $ref: "#/components/schemas/OpenAIMessage"
+        text:
+          type: string
+      required:
+        - index
+      type: object
+    OpenAIError:
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        type:
+          type: string
+      type: object
+    OpenAIFunctionCall:
+      additionalProperties: false
+      properties:
+        arguments:
+          type: string
+        name:
+          type: string
+      type: object
+    OpenAIMessage:
+      additionalProperties: false
+      properties:
+        content:
+          type: string
+        functionCall:
+          $ref: "#/components/schemas/OpenAIFunctionCall"
+        name:
+          type: string
+        role:
+          type: string
+        toolCallId:
+          type: string
+        toolCalls:
+          items:
+            $ref: "#/components/schemas/OpenAIToolCall"
+          type:
+            - array
+            - "null"
+      type: object
+    OpenAIRequest:
+      additionalProperties: false
+      properties:
+        includeUsage:
+          type: boolean
+        maxTokens:
+          format: int64
+          type: integer
+        messages:
+          items:
+            $ref: "#/components/schemas/OpenAIMessage"
+          type:
+            - array
+            - "null"
+        model:
+          type: string
+        prompt:
+          type: string
+        stream:
+          type: boolean
+        temperature:
+          format: double
+          type: number
+        tools:
+          items:
+            $ref: "#/components/schemas/OpenAITool"
+          type:
+            - array
+            - "null"
+        topP:
+          format: double
+          type: number
+        unknownFields:
+          additionalProperties: {}
+          type: object
+      type: object
+    OpenAIResponse:
+      additionalProperties: false
+      properties:
+        choices:
+          items:
+            $ref: "#/components/schemas/OpenAIChoice"
+          type:
+            - array
+            - "null"
+        error:
+          $ref: "#/components/schemas/OpenAIError"
+        id:
+          type: string
+        model:
+          type: string
+        streamed:
+          type: boolean
+        usage:
+          $ref: "#/components/schemas/OpenAIUsage"
+      type: object
+    OpenAITool:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        name:
+          type: string
+        parameters: {}
+        type:
+          type: string
+      type: object
+    OpenAIToolCall:
+      additionalProperties: false
+      properties:
+        arguments:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+      type: object
+    OpenAIUsage:
+      additionalProperties: false
+      properties:
+        cachedTokens:
+          format: int64
+          type: integer
+        completionTokens:
+          format: int64
+          type: integer
+        promptTokens:
+          format: int64
+          type: integer
+        totalTokens:
+          format: int64
+          type: integer
       type: object
     Paused:
       additionalProperties: false
@@ -651,6 +890,10 @@ components:
         cacheRead:
           format: int64
           type: integer
+        cost:
+          description: Estimated USD cost across the session, from the built-in pricing table.
+          format: double
+          type: number
         entryIds:
           description: Captured traffic entries belonging to this session, oldest first.
           items:
@@ -719,6 +962,7 @@ components:
         - outputTokens
         - cacheRead
         - cacheCreate
+        - cost
         - status
         - hasError
         - hasStreaming

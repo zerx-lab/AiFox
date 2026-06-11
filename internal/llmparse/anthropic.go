@@ -21,11 +21,17 @@ type Input struct {
 // if no analyzer recognized the endpoint. Returning nil is normal; the
 // renderer falls back to its raw JSON view for unknown endpoints.
 func Analyze(in Input) *Analysis {
+	if isAnthropicCountTokens(in) {
+		return analyzeAnthropicCountTokens(in)
+	}
 	if isAnthropicMessages(in) {
 		return analyzeAnthropicMessages(in)
 	}
 	if isOpenAIChat(in) {
 		return analyzeOpenAIChat(in)
+	}
+	if isOpenAICompletions(in) {
+		return analyzeOpenAICompletions(in)
 	}
 	return nil
 }
@@ -74,6 +80,67 @@ func analyzeAnthropicMessages(in Input) *Analysis {
 		}
 	}
 
+	fillAnthropicNormalized(out)
+	return out
+}
+
+// fillAnthropicNormalized projects the parsed Anthropic response onto the shared
+// Usage / StopReason / Error fields so session rollups and pricing can read one
+// shape regardless of provider.
+func fillAnthropicNormalized(out *Analysis) {
+	if out.Anthropic == nil || out.Anthropic.Response == nil {
+		return
+	}
+	resp := out.Anthropic.Response
+	out.StopReason = normalizeStopReason(resp.StopReason)
+	if u := resp.Usage; u != nil {
+		out.Usage = &NormalizedUsage{
+			InputTokens:      u.InputTokens,
+			OutputTokens:     u.OutputTokens,
+			CacheReadTokens:  u.CacheReadInputTokens,
+			CacheWriteTokens: u.CacheCreationInputTokens,
+		}
+	}
+	if e := resp.Error; e != nil {
+		out.Error = &NormalizedError{Type: e.Type, Message: e.Message}
+	}
+}
+
+// isAnthropicCountTokens matches POST /v1/messages/count_tokens. The request
+// body is shaped like a messages request; the response is just {input_tokens}.
+func isAnthropicCountTokens(in Input) bool {
+	if !strings.EqualFold(in.Method, "POST") {
+		return false
+	}
+	path := trimQuery(in.URL)
+	return strings.HasSuffix(path, "/v1/messages/count_tokens") ||
+		strings.HasSuffix(path, "/messages/count_tokens")
+}
+
+func analyzeAnthropicCountTokens(in Input) *Analysis {
+	out := &Analysis{
+		Kind:      KindAnthropicCountTokens,
+		Endpoint:  fmt.Sprintf("%s %s", strings.ToUpper(in.Method), trimQuery(in.URL)),
+		Anthropic: &AnthropicAnalysis{},
+	}
+	if req, warnings := parseAnthropicRequest(in.RequestBody); req != nil {
+		out.Anthropic.Request = req
+		out.Warnings = append(out.Warnings, warnings...)
+		out.Normalized = anthropicToNormalized(req)
+	} else if in.RequestBody != "" {
+		out.Warnings = append(out.Warnings, "request body is not valid JSON")
+	}
+	if in.ResponseBody != "" {
+		var raw struct {
+			InputTokens int `json:"input_tokens"`
+		}
+		if err := json.Unmarshal([]byte(in.ResponseBody), &raw); err != nil {
+			out.Warnings = append(out.Warnings, "count_tokens response is not valid JSON: "+err.Error())
+		} else {
+			out.Anthropic.Response = &AnthropicResponse{Usage: &AnthropicUsage{InputTokens: raw.InputTokens}}
+			out.Usage = &NormalizedUsage{InputTokens: raw.InputTokens}
+		}
+	}
 	return out
 }
 
@@ -99,6 +166,9 @@ var knownAnthropicRequestKeys = map[string]bool{
 	"tool_choice":    true,
 	"messages":       true,
 	"metadata":       true,
+	"thinking":       true,
+	"betas":          true,
+	"service_tier":   true,
 }
 
 func parseAnthropicRequest(body string) (*AnthropicRequest, []string) {
@@ -156,6 +226,15 @@ func parseAnthropicRequest(body string) (*AnthropicRequest, []string) {
 	}
 	if v, ok := raw["metadata"]; ok {
 		req.Metadata = v
+	}
+	if v, ok := raw["thinking"].(map[string]any); ok {
+		req.Thinking = parseThinking(v)
+	}
+	if arr, ok := raw["betas"].([]any); ok {
+		req.Betas = stringArray(arr)
+	}
+	if v, ok := raw["service_tier"].(string); ok {
+		req.ServiceTier = v
 	}
 
 	for k, v := range raw {
@@ -269,7 +348,10 @@ func parseBlock(v any) AnthropicBlock {
 			blk.Content = x
 		}
 	case "image":
-		// Just pass through source.* in Raw; we don't want to inline base64.
+		// Structure source.* (type / media_type / url) but never store the
+		// base64 payload — record only its byte size. Raw keeps the source for
+		// the JSON fallback view (unchanged behavior).
+		blk.Image = parseImageSource(m["source"])
 		blk.Raw = m["source"]
 	case "thinking", "redacted_thinking":
 		if s, ok := m["thinking"].(string); ok {
@@ -283,8 +365,76 @@ func parseBlock(v any) AnthropicBlock {
 	}
 	if cc, ok := m["cache_control"]; ok {
 		blk.CacheControl = cc
+		blk.Cache = parseCacheControl(cc)
 	}
 	return blk
+}
+
+// parseThinking structures the request's thinking config (type + budget_tokens).
+func parseThinking(m map[string]any) *AnthropicThinking {
+	t := &AnthropicThinking{}
+	if s, ok := m["type"].(string); ok {
+		t.Type = s
+	}
+	if n, ok := m["budget_tokens"].(float64); ok {
+		t.BudgetTokens = int(n)
+	}
+	return t
+}
+
+// parseImageSource structures an image block's source without retaining base64
+// data. For base64 sources only the decoded byte size is recorded (Bytes); for
+// URL sources the URL is kept.
+func parseImageSource(v any) *AnthropicImage {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	img := &AnthropicImage{}
+	if s, ok := m["type"].(string); ok {
+		img.SourceType = s
+	}
+	if s, ok := m["media_type"].(string); ok {
+		img.MediaType = s
+	}
+	if s, ok := m["url"].(string); ok {
+		img.URL = s
+	}
+	if s, ok := m["data"].(string); ok {
+		// base64 length → decoded byte size, without storing the payload.
+		img.Bytes = base64DecodedLen(s)
+	}
+	return img
+}
+
+// base64DecodedLen returns the number of bytes a base64 string decodes to,
+// accounting for padding, without allocating the decoded buffer.
+func base64DecodedLen(s string) int {
+	n := len(s)
+	if n == 0 {
+		return 0
+	}
+	pad := 0
+	for i := n - 1; i >= 0 && s[i] == '='; i-- {
+		pad++
+	}
+	return n/4*3 - pad
+}
+
+// parseCacheControl structures a cache_control annotation (type + optional ttl).
+func parseCacheControl(v any) *AnthropicCacheControl {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	cc := &AnthropicCacheControl{}
+	if s, ok := m["type"].(string); ok {
+		cc.Type = s
+	}
+	if s, ok := m["ttl"].(string); ok {
+		cc.TTL = s
+	}
+	return cc
 }
 
 func parseAnthropicResponse(body string) (*AnthropicResponse, []string) {

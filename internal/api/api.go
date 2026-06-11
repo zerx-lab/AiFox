@@ -20,6 +20,7 @@ import (
 
 	"github.com/zerx-lab/ai-fox/internal/config"
 	"github.com/zerx-lab/ai-fox/internal/llmparse"
+	"github.com/zerx-lab/ai-fox/internal/pricing"
 	"github.com/zerx-lab/ai-fox/internal/session"
 	"github.com/zerx-lab/ai-fox/internal/store"
 )
@@ -395,6 +396,9 @@ type EntryMeta struct {
 	OutputTokens int `json:"outputTokens"`
 	CacheRead    int `json:"cacheRead"`
 	CacheCreate  int `json:"cacheCreate"`
+	// Cost is the estimated USD cost of this entry from the built-in pricing
+	// table; 0 when the model is unknown to the table.
+	Cost float64 `json:"cost,omitempty"`
 }
 
 func toMeta(e *store.Entry) EntryMeta {
@@ -419,28 +423,47 @@ func toMeta(e *store.Entry) EntryMeta {
 		m.Endpoint = a.Endpoint
 		m.WarningCount = len(a.Warnings)
 		m.IsUtility = llmparse.IsUtilityRequest(a)
-		if a.Anthropic != nil {
-			m.HasStructured = true
-			if a.Anthropic.Request != nil {
-				m.Model = a.Anthropic.Request.Model
-			}
-			if r := a.Anthropic.Response; r != nil {
-				if r.Model != "" {
-					m.Model = r.Model
-				}
-				if r.Error != nil {
-					m.HasResponseError = true
-				}
-				if u := r.Usage; u != nil {
-					m.InputTokens = u.InputTokens
-					m.OutputTokens = u.OutputTokens
-					m.CacheRead = u.CacheReadInputTokens
-					m.CacheCreate = u.CacheCreationInputTokens
-				}
+		// Structured when any provider analyzer recognized the endpoint.
+		m.HasStructured = a.Anthropic != nil || a.OpenAI != nil
+		m.Model = analysisModel(a)
+		if a.Error != nil {
+			m.HasResponseError = true
+		}
+		// Token figures come from the provider-neutral usage so OpenAI entries
+		// fill them the same way Anthropic ones do.
+		if u := a.Usage; u != nil {
+			m.InputTokens = u.InputTokens
+			m.OutputTokens = u.OutputTokens
+			m.CacheRead = u.CacheReadTokens
+			m.CacheCreate = u.CacheWriteTokens
+			if cost, ok := pricing.Cost(m.Model, *u); ok {
+				m.Cost = cost
 			}
 		}
 	}
 	return m
+}
+
+// analysisModel returns the best model label for an entry: the response model
+// when known (the authoritative echo), else the request model.
+func analysisModel(a *llmparse.Analysis) string {
+	if a.Anthropic != nil {
+		if r := a.Anthropic.Response; r != nil && r.Model != "" {
+			return r.Model
+		}
+		if req := a.Anthropic.Request; req != nil {
+			return req.Model
+		}
+	}
+	if a.OpenAI != nil {
+		if r := a.OpenAI.Response; r != nil && r.Model != "" {
+			return r.Model
+		}
+		if req := a.OpenAI.Request; req != nil {
+			return req.Model
+		}
+	}
+	return ""
 }
 
 func toWire(e *store.Entry) TrafficEntry {
