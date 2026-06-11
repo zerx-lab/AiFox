@@ -17,6 +17,8 @@ components:
           $ref: "#/components/schemas/NormalizedRequest"
         openai:
           $ref: "#/components/schemas/OpenAIAnalysis"
+        responses:
+          $ref: "#/components/schemas/ResponsesAnalysis"
         stopReason:
           type: string
         usage:
@@ -873,6 +875,171 @@ components:
           description: Override nucleus sampling threshold.
           format: double
           type: number
+      type: object
+    ResponsesAnalysis:
+      additionalProperties: false
+      properties:
+        request:
+          $ref: "#/components/schemas/ResponsesRequest"
+        response:
+          $ref: "#/components/schemas/ResponsesResponse"
+      type: object
+    ResponsesImage:
+      additionalProperties: false
+      properties:
+        detail:
+          type: string
+        url:
+          type: string
+      type: object
+    ResponsesIncomplete:
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+      type: object
+    ResponsesItem:
+      additionalProperties: false
+      properties:
+        arguments:
+          type: string
+        callId:
+          type: string
+        content:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        output:
+          type: string
+        parts:
+          items:
+            $ref: "#/components/schemas/ResponsesPart"
+          type:
+            - array
+            - "null"
+        raw: {}
+        role:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        type:
+          type: string
+      type: object
+    ResponsesPart:
+      additionalProperties: false
+      properties:
+        image:
+          $ref: "#/components/schemas/ResponsesImage"
+        raw: {}
+        text:
+          type: string
+        type:
+          type: string
+      type: object
+    ResponsesReasoningConfig:
+      additionalProperties: false
+      properties:
+        effort:
+          type: string
+        summary:
+          type: string
+      type: object
+    ResponsesRequest:
+      additionalProperties: false
+      properties:
+        input:
+          items:
+            $ref: "#/components/schemas/ResponsesItem"
+          type:
+            - array
+            - "null"
+        instructions:
+          type: string
+        maxOutputTokens:
+          format: int64
+          type: integer
+        model:
+          type: string
+        previousResponseId:
+          type: string
+        reasoning:
+          $ref: "#/components/schemas/ResponsesReasoningConfig"
+        store:
+          type: boolean
+        stream:
+          type: boolean
+        temperature:
+          format: double
+          type: number
+        text: {}
+        tools:
+          items:
+            $ref: "#/components/schemas/ResponsesTool"
+          type:
+            - array
+            - "null"
+        unknownFields:
+          additionalProperties: {}
+          type: object
+      type: object
+    ResponsesResponse:
+      additionalProperties: false
+      properties:
+        error:
+          $ref: "#/components/schemas/OpenAIError"
+        id:
+          type: string
+        incomplete:
+          $ref: "#/components/schemas/ResponsesIncomplete"
+        model:
+          type: string
+        output:
+          items:
+            $ref: "#/components/schemas/ResponsesItem"
+          type:
+            - array
+            - "null"
+        status:
+          type: string
+        streamed:
+          type: boolean
+        usage:
+          $ref: "#/components/schemas/ResponsesUsage"
+      type: object
+    ResponsesTool:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        name:
+          type: string
+        parameters: {}
+        raw: {}
+        type:
+          type: string
+      type: object
+    ResponsesUsage:
+      additionalProperties: false
+      properties:
+        cachedTokens:
+          format: int64
+          type: integer
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+        reasoningTokens:
+          format: int64
+          type: integer
+        totalTokens:
+          format: int64
+          type: integer
       type: object
     SessionSummaryBody:
       additionalProperties: false

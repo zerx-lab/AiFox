@@ -26,6 +26,7 @@ const (
 	KindAnthropicCountTokens = "anthropic.count_tokens"
 	KindOpenAIChat           = "openai.chat"
 	KindOpenAICompletions    = "openai.completions"
+	KindOpenAIResponses      = "openai.responses"
 )
 
 // ReifyAnalysis coerces a value back into a *Analysis. Live entries already
@@ -100,6 +101,10 @@ type Analysis struct {
 	// OpenAI carries the parsed Chat-Completions view when Kind == openai.chat
 	// (and a minimal view for openai.completions).
 	OpenAI *OpenAIAnalysis `json:"openai,omitempty"`
+	// Responses carries the parsed Responses-API view when Kind ==
+	// openai.responses (Codex CLI). Its tree (input/output items) differs from
+	// Chat Completions' choices[], so it gets its own field.
+	Responses *ResponsesAnalysis `json:"responses,omitempty"`
 	// Normalized is the provider-neutral projection used by session
 	// aggregation. Every analyzer should populate this — it's what enables
 	// the UI to group requests across providers under a single session.

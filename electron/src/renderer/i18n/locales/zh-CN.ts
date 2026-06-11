@@ -151,6 +151,8 @@ export const zhCN: Dictionary = {
       "这条流量没有结构化视图，请在右侧的「请求 / 响应」标签查看原文。",
     openaiPending:
       "已识别为 OpenAI 请求。完整结构化视图即将上线，目前可在右侧「请求 / 响应」标签及上方的 token / 成本查看。",
+    responsesPending:
+      "已识别为 OpenAI Responses（Codex）请求。完整结构化视图即将上线，目前可在右侧「请求 / 响应」标签及上方的 token / 成本查看。",
   },
   settings: {
     title: "设置",

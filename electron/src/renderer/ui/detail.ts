@@ -191,6 +191,8 @@ function overviewBody(entry: TrafficEntry): HTMLElement {
     analysis?.anthropic?.response?.model ||
     analysis?.openai?.response?.model ||
     analysis?.openai?.request?.model ||
+    analysis?.responses?.response?.model ||
+    analysis?.responses?.request?.model ||
     "—";
 
   const sessionPanel = renderSessionOverview(entry);

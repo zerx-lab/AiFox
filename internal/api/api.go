@@ -424,7 +424,7 @@ func toMeta(e *store.Entry) EntryMeta {
 		m.WarningCount = len(a.Warnings)
 		m.IsUtility = llmparse.IsUtilityRequest(a)
 		// Structured when any provider analyzer recognized the endpoint.
-		m.HasStructured = a.Anthropic != nil || a.OpenAI != nil
+		m.HasStructured = a.Anthropic != nil || a.OpenAI != nil || a.Responses != nil
 		m.Model = analysisModel(a)
 		if a.Error != nil {
 			m.HasResponseError = true
@@ -460,6 +460,14 @@ func analysisModel(a *llmparse.Analysis) string {
 			return r.Model
 		}
 		if req := a.OpenAI.Request; req != nil {
+			return req.Model
+		}
+	}
+	if a.Responses != nil {
+		if r := a.Responses.Response; r != nil && r.Model != "" {
+			return r.Model
+		}
+		if req := a.Responses.Request; req != nil {
 			return req.Model
 		}
 	}

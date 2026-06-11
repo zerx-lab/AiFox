@@ -152,6 +152,8 @@ export const en = {
       "No structured timeline view for this endpoint — see Request / Response tabs on the right.",
     openaiPending:
       "OpenAI request recognized. The full structured view is coming soon — see Request / Response tabs and token/cost above.",
+    responsesPending:
+      "OpenAI Responses (Codex) request recognized. The full structured view is coming soon — see Request / Response tabs and token/cost above.",
   },
   settings: {
     title: "Settings",

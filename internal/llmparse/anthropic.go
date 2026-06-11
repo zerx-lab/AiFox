@@ -27,6 +27,9 @@ func Analyze(in Input) *Analysis {
 	if isAnthropicMessages(in) {
 		return analyzeAnthropicMessages(in)
 	}
+	if isOpenAIResponses(in) {
+		return analyzeOpenAIResponses(in)
+	}
 	if isOpenAIChat(in) {
 		return analyzeOpenAIChat(in)
 	}

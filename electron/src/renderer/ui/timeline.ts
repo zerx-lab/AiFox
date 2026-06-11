@@ -123,14 +123,18 @@ function renderHeader(entry: TrafficEntry): HTMLElement {
   const resp = anth?.response;
   const usage = resp?.usage;
 
-  // Model falls back across providers: Anthropic request/response, then OpenAI,
-  // so OpenAI entries show a model in the header instead of a dash.
+  // Model falls back across providers: Anthropic request/response, then OpenAI
+  // chat, then OpenAI Responses, so every recognized entry shows a model in the
+  // header instead of a dash.
   const oai = analysis?.openai;
+  const resp_ = analysis?.responses;
   const model =
     req?.model ||
     resp?.model ||
     oai?.response?.model ||
     oai?.request?.model ||
+    resp_?.response?.model ||
+    resp_?.request?.model ||
     "—";
 
   const chips: HTMLElement[] = [];
@@ -251,11 +255,22 @@ function entryChip(target: EntryMeta, ordinal: number, active: boolean): HTMLEle
 }
 
 function renderGeneric(entry: TrafficEntry, analysis?: Analysis): HTMLElement {
-  // OpenAI entries are recognized but their rich structured view is M4; show a
-  // provider-aware hint so the user knows the parser saw it, plus the model.
+  // OpenAI chat and Responses (Codex) entries are recognized but their rich
+  // structured view is a later milestone; show a provider-aware hint so the user
+  // knows the parser saw it, plus the model. Token/cost still surface via meta.
   const oai = analysis?.openai;
-  const hint = oai ? t("timeline.openaiPending") : t("timeline.noStructuredView");
-  const model = oai?.response?.model || oai?.request?.model || "";
+  const resp = analysis?.responses;
+  const hint = resp
+    ? t("timeline.responsesPending")
+    : oai
+      ? t("timeline.openaiPending")
+      : t("timeline.noStructuredView");
+  const model =
+    oai?.response?.model ||
+    oai?.request?.model ||
+    resp?.response?.model ||
+    resp?.request?.model ||
+    "";
   return h(
     "div.tl-generic",
     null,

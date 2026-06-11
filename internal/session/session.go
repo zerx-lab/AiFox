@@ -91,7 +91,13 @@ type Aggregator struct {
 	bucket   map[string][]*Summary                   // fingerprint -> ordered session list (fallback only)
 	last     map[string][]llmparse.NormalizedMessage // sessionID -> last seen messages, for prefix containment
 	byEntry  map[string]string                       // entryID -> sessionID
-	dirty    map[string]struct{}                     // sessionIDs needing a recompute on the next flush tick
+	// byResponse maps an OpenAI Responses-API response id to the session that
+	// produced it. A later request whose previous_response_id matches joins that
+	// session directly (higher priority than the fingerprint fallback). Bounded
+	// the same way byEntry is: reconcile prunes ids whose owning session has no
+	// live entries left.
+	byResponse map[string]string   // responseID -> sessionID
+	dirty      map[string]struct{} // sessionIDs needing a recompute on the next flush tick
 	// names persists user-supplied labels keyed by session ANCHOR (a header key
 	// for keyed sessions, a fingerprint for fallback ones) so they survive an
 	// app restart: the aggregator forgets sessions on shutdown, but next time
@@ -109,16 +115,17 @@ type Aggregator struct {
 // labels across restarts; pass "" to keep names in-memory only.
 func New(st *store.Store, namesPath string) *Aggregator {
 	a := &Aggregator{
-		st:        st,
-		sessions:  make(map[string]*Summary),
-		byKey:     make(map[string]*Summary),
-		bucket:    make(map[string][]*Summary),
-		last:      make(map[string][]llmparse.NormalizedMessage),
-		byEntry:   make(map[string]string),
-		dirty:     make(map[string]struct{}),
-		names:     make(map[string]string),
-		namesPath: namesPath,
-		subs:      make(map[int]chan struct{}),
+		st:         st,
+		sessions:   make(map[string]*Summary),
+		byKey:      make(map[string]*Summary),
+		bucket:     make(map[string][]*Summary),
+		last:       make(map[string][]llmparse.NormalizedMessage),
+		byEntry:    make(map[string]string),
+		byResponse: make(map[string]string),
+		dirty:      make(map[string]struct{}),
+		names:      make(map[string]string),
+		namesPath:  namesPath,
+		subs:       make(map[int]chan struct{}),
 	}
 	a.loadNames()
 	return a
@@ -270,6 +277,14 @@ func (a *Aggregator) reconcile() {
 			a.dirty[sid] = struct{}{}
 		}
 	}
+	// Prune the Responses-chain map for sessions that have lost every live entry,
+	// keeping it bounded the same way byEntry is. A session whose entries were all
+	// evicted can no longer be a useful chain anchor.
+	for rid, sid := range a.byResponse {
+		if s := a.sessions[sid]; s == nil || len(s.EntryIDs) == 0 {
+			delete(a.byResponse, rid)
+		}
+	}
 	a.mu.Unlock()
 }
 
@@ -412,6 +427,7 @@ func (a *Aggregator) Clear() error {
 	a.bucket = make(map[string][]*Summary)
 	a.last = make(map[string][]llmparse.NormalizedMessage)
 	a.byEntry = make(map[string]string)
+	a.byResponse = make(map[string]string)
 	a.dirty = make(map[string]struct{})
 	a.names = make(map[string]string)
 	path := a.namesPath
@@ -454,9 +470,11 @@ func (a *Aggregator) consume(e *store.Entry) {
 	key, keyed := sessionKeyOf(e)
 	analysis, _ := e.Analysis.(*llmparse.Analysis)
 	norm := normalizedOf(analysis)
-	// Without an explicit key we need the analysis (for the fingerprint anchor);
-	// with a key we can place the entry even before its body parses.
-	if !keyed && norm == nil {
+	prevID := analysis.PreviousResponseID()
+	respID := analysis.ResponseID()
+	// We can place the entry when it carries any correlation signal: an explicit
+	// client key, a Responses chain id, or a parsed fingerprint anchor.
+	if !keyed && prevID == "" && norm == nil {
 		return
 	}
 
@@ -464,32 +482,51 @@ func (a *Aggregator) consume(e *store.Entry) {
 	defer a.mu.Unlock()
 
 	// Already bucketed (typical for in-stream chunk re-broadcasts): refresh the
-	// prefix anchor (the message list grows as the turn streams) and mark dirty.
+	// prefix anchor (the message list grows as the turn streams), register the
+	// response id once it parses, and mark dirty.
 	if sid, ok := a.byEntry[e.ID]; ok {
 		if norm != nil {
 			a.last[sid] = norm.Messages
+		}
+		if respID != "" {
+			a.byResponse[respID] = sid
 		}
 		a.dirty[sid] = struct{}{}
 		return
 	}
 
 	var match *Summary
-	if keyed {
-		// Explicit client session key: bucket directly. Model/system/first-
-		// message changes within the same key never split the session.
-		match = a.byKey[key]
-		if match == nil {
-			match = a.newSession(key, e, norm)
-			a.byKey[key] = match
-		}
-	} else {
-		// Fallback: fingerprint bucket + longest message-prefix match; fork when
-		// the incoming request diverges from every candidate in the bucket.
-		fp := norm.Fingerprint()
-		match = a.bestPrefixMatch(fp, norm.Messages)
-		if match == nil {
-			match = a.newSession(fp, e, norm)
-			a.bucket[fp] = append(a.bucket[fp], match)
+	switch {
+	case prevID != "" && a.byResponse[prevID] != "":
+		// Responses-API chain: previous_response_id points at a response we
+		// already attributed. This is more reliable than any fingerprint match,
+		// so it wins. Fall through to the fingerprint path only if the chained
+		// session has somehow been dropped.
+		match = a.sessions[a.byResponse[prevID]]
+	}
+	if match == nil {
+		switch {
+		case keyed:
+			// Explicit client session key: bucket directly. Model/system/first-
+			// message changes within the same key never split the session.
+			match = a.byKey[key]
+			if match == nil {
+				match = a.newSession(key, e, norm)
+				a.byKey[key] = match
+			}
+		case norm != nil:
+			// Fallback: fingerprint bucket + longest message-prefix match; fork
+			// when the incoming request diverges from every candidate.
+			fp := norm.Fingerprint()
+			match = a.bestPrefixMatch(fp, norm.Messages)
+			if match == nil {
+				match = a.newSession(fp, e, norm)
+				a.bucket[fp] = append(a.bucket[fp], match)
+			}
+		default:
+			// Only a previous_response_id signal but its session is gone; mint a
+			// fresh chain-anchored session so the entry is not dropped.
+			match = a.newSession("resp:"+prevID, e, norm)
 		}
 	}
 
@@ -497,6 +534,11 @@ func (a *Aggregator) consume(e *store.Entry) {
 	a.byEntry[e.ID] = match.ID
 	if norm != nil {
 		a.last[match.ID] = norm.Messages
+	}
+	// Register this turn's response id so the next request's previous_response_id
+	// chains into the same session.
+	if respID != "" {
+		a.byResponse[respID] = match.ID
 	}
 	a.dirty[match.ID] = struct{}{}
 }
@@ -635,7 +677,7 @@ func (a *Aggregator) computeRollup(entryIDs []string) rollup {
 		// through Analysis.Usage / the normalized model below — the root cause of
 		// OpenAI sessions previously showing zero tokens (it only read
 		// ana.Anthropic.Response.Usage).
-		if ana.Anthropic == nil && ana.OpenAI == nil {
+		if ana.Anthropic == nil && ana.OpenAI == nil && ana.Responses == nil {
 			continue
 		}
 		utility := llmparse.IsUtilityRequest(ana)
@@ -687,6 +729,14 @@ func rollupModel(ana *llmparse.Analysis) string {
 			return r.Model
 		}
 		if req := ana.OpenAI.Request; req != nil {
+			return req.Model
+		}
+	}
+	if ana.Responses != nil {
+		if r := ana.Responses.Response; r != nil && r.Model != "" {
+			return r.Model
+		}
+		if req := ana.Responses.Request; req != nil {
 			return req.Model
 		}
 	}
