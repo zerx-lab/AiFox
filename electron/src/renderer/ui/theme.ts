@@ -44,6 +44,18 @@ export async function initTheme() {
 
 function apply() {
   document.documentElement.dataset.theme = resolvedTheme();
+  // Mirror the explicit choice for public/theme-boot.js's first-paint pass.
+  // "System" clears the mirror so the CSS prefers-color-scheme fallback
+  // (always current) decides the first frame instead of a stale snapshot.
+  try {
+    if (userChoice === "") {
+      localStorage.removeItem("aifox-theme");
+    } else {
+      localStorage.setItem("aifox-theme", userChoice);
+    }
+  } catch {
+    // Best effort only; the CSS fallback still covers the first paint.
+  }
 }
 
 function normalize(c: string): ThemeChoice {

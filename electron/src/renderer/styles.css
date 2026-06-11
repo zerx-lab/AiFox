@@ -59,6 +59,41 @@
   --shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
 }
 
+/* First-paint fallback: before theme.ts (a deferred module) sets data-theme,
+ * follow the OS preference so a light-mode first frame doesn't flash dark.
+ * Must stay in sync with the [data-theme="light"] block above. An explicit
+ * user choice is applied even earlier by public/theme-boot.js. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --accent: #c8902a;
+    --accent-deep: #a87514;
+    --accent-soft: rgba(200, 144, 42, 0.16);
+    --accent-fg: #ffffff;
+
+    --ok: #2f8f55;
+    --ok-soft: rgba(47, 143, 85, 0.14);
+    --err: #c0383b;
+    --err-soft: rgba(192, 56, 59, 0.12);
+    --warn: #b06b1a;
+    --tool: #2f6fa6;
+    --tool-soft: rgba(47, 111, 166, 0.12);
+    --user: #6f5fb5;
+
+    --bg: #f7f6f2;
+    --bg-elev: #ffffff;
+    --bg-elev-2: #fbfaf6;
+    --bg-hover: #ece9e0;
+    --titlebar-bg: #efece4;
+    --border: #e0dccf;
+    --border-strong: #c8c3b3;
+    --fg: #18181b;
+    --fg-2: #3a3a40;
+    --fg-3: #6a6a72;
+    --fg-4: #98989f;
+    --shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  }
+}
+
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
     "Noto Sans CJK SC", sans-serif;

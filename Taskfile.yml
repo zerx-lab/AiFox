@@ -90,6 +90,11 @@ tasks:
     cmds:
       - pnpm run typecheck
 
+  test:ui:
+    desc: Vitest unit tests for pure-logic renderer modules
+    cmds:
+      - pnpm run test:ui
+
   lint:ts:
     desc: Biome lint over electron/src (schema.ts excluded)
     cmds:
@@ -101,7 +106,7 @@ tasks:
 
   verify:
     desc: Acceptance gate before commit (typecheck + tests + race + lint)
-    deps: [typecheck, test:go, test:go:race, lint]
+    deps: [typecheck, test:go, test:go:race, test:ui, lint]
 
   # ---- Composite ----
 

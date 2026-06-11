@@ -86,7 +86,8 @@ export async function openSse(
   return handle;
 }
 
-function parseEvent(raw: string): SseEvent | null {
+/** Exported for unit tests; not part of the consumer-facing surface. */
+export function parseEvent(raw: string): SseEvent | null {
   let event = "message";
   const dataLines: string[] = [];
   for (const line of raw.split("\n")) {

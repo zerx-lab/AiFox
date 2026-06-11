@@ -12,7 +12,7 @@ import {
 } from "./api-service";
 import { h } from "./dom";
 import { fmtClock } from "./format";
-import { getState, setState } from "./state";
+import { getState, setState, upsertBreakpoint } from "./state";
 
 type BreakpointWire = components["schemas"]["Breakpoint"];
 
@@ -81,10 +81,9 @@ export function renderBreakpoints(): HTMLElement {
     });
     if (!res.ok) return; // service toasted the failure
     draft.pattern = "";
-    // Trigger re-render; the SSE 'breakpoints' event also updates state,
-    // but the click handler's caller doesn't re-render, so nudge the
-    // 'struct' slice (the breakpoints list lives there).
-    setState({ breakpoints: getState().breakpoints });
+    // Show the acknowledged breakpoint immediately (§4.1.10); the SSE
+    // breakpoints event replaces the whole list when it arrives.
+    upsertBreakpoint(res.data);
   };
 
   const patternInput = document.createElement("input");

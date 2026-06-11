@@ -22,7 +22,8 @@
     "openapi-fetch": "^0.17.0",
     "openapi-typescript": "^7.13.0",
     "typescript": "^5.9.3",
-    "vite": "^8.0.13"
+    "vite": "^8.0.13",
+    "vitest": "^4.1.8"
   },
   "main": ".vite/build/main.js",
   "name": "ai-fox",
@@ -38,6 +39,7 @@
     "make": "electron-forge make",
     "package": "electron-forge package",
     "start": "electron-forge start",
+    "test:ui": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "version": "0.1.0"

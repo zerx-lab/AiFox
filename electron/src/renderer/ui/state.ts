@@ -615,6 +615,19 @@ export function replaceBreakpoints(items: Breakpoint[], paused: PausedRequest[])
   touch("struct");
 }
 
+/** Insert a breakpoint the server just acknowledged without waiting for the
+ *  next SSE breakpoints event (§4.1.10). The event stays authoritative and
+ *  replaces the whole list when it arrives. */
+export function upsertBreakpoint(bp: Breakpoint) {
+  const idx = state.breakpoints.findIndex((b) => b.id === bp.id);
+  if (idx >= 0) {
+    state.breakpoints = state.breakpoints.map((b, i) => (i === idx ? bp : b));
+  } else {
+    state.breakpoints = [...state.breakpoints, bp];
+  }
+  touch("struct");
+}
+
 // Replay lineage map (§4.1.5): newEntryId → originalEntryId, recorded when a
 // replay is issued so the Diff tab can pair the replayed entry with its source
 // even before the SSE-streamed EntryMeta (which also carries replayedFromId)

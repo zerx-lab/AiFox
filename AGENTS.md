@@ -18,7 +18,8 @@ Go struct → openapi.yaml → schema.ts → client.ts → renderer
 `task verify` 是硬门槛，它聚合：
 
 - `task typecheck` — TS 全量 `tsc --noEmit`，含生成的 `schema.ts`。
-- `task test:go` — `go test ./...`。
+- `task test:go` — `go test ./...`（另有 `test:go:race` 对 store/session/server 跑 -race）。
+- `task test:ui` — Vitest，只测渲染进程纯逻辑模块（`electron/src/renderer/**/*.test.ts`，node 环境，无 DOM）；UI 交互仍由 typecheck 兜底。
 - `task lint` — `lint:go`（golangci-lint：`govet`+`nilness`/`staticcheck`/`errcheck`/`ineffassign`/`unused`/`gofmt`）+ `lint:ts`（Biome，`schema.ts` 已排除）。
 
 不要为了过 lint 顺手"清理"无关代码——见 surgical changes 原则。新加的 lint 规则要先在 `.golangci.yml` / `biome.json` 里登记，再写实现。`task build` 自身依赖 typecheck，可独立用于验证可分发产物能编。
