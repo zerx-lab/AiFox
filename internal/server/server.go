@@ -10,6 +10,7 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"net"
 	"net/http"
@@ -165,8 +166,12 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func authMiddleware(token string) func(huma.Context, func(huma.Context)) {
+	expected := []byte(token)
 	return func(ctx huma.Context, next func(huma.Context)) {
-		if ctx.Header(AuthHeader) != token {
+		// Constant-time compare so a malicious local process can't time the
+		// handshake-token check byte by byte. The loopback bind already limits
+		// reach, but the token is the only authn we have, so don't leak it.
+		if subtle.ConstantTimeCompare([]byte(ctx.Header(AuthHeader)), expected) != 1 {
 			ctx.SetStatus(http.StatusUnauthorized)
 			return
 		}

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -615,13 +616,84 @@ func tailTrafficHandler(st *store.Store) func(context.Context, *TrafficTailInput
 		if since > int64(len(body)) {
 			since = int64(len(body))
 		}
-		out.Body.AppendBytes = body[since:]
+		done := !e.EndedAt.IsZero()
+		// Slice on a UTF-8 rune boundary. A naive body[since:] can split a
+		// multi-byte rune two ways: (1) `since` itself may have landed mid-rune
+		// from a prior tail that ended mid-rune, and (2) the live `body` is still
+		// growing, so its current end can be mid-rune. We back `since` up to the
+		// rune start it sits inside, and — while the entry is still streaming —
+		// trim the slice end back to the last complete rune so the client never
+		// receives half a rune. Once finalized (done) the body is whole, so we
+		// emit through the end verbatim. The renderer must advance its offset by
+		// len(appendBytes) (which it already does); because both ends are aligned
+		// the concatenated byte stream is identical to body, just re-cut on rune
+		// boundaries.
+		since = alignRuneStart(body, since)
+		end := int64(len(body))
+		if !done {
+			// Mid-stream the body's tail may be a partial multi-byte rune, so trim
+			// the slice end back to the end of the last COMPLETE rune. (A finalized
+			// body is whole, so we emit through its end verbatim.)
+			end = lastCompleteRuneEnd(body)
+		}
+		if end < since {
+			end = since
+		}
+		out.Body.AppendBytes = body[since:end]
+		// ResponseSize stays the true total so the renderer's size display is
+		// honest; the client advances its own offset by len(appendBytes), so the
+		// rune-trimmed `end` (a few bytes short of len(body) mid-stream) is picked
+		// up on the next poll once the rune completes.
 		out.Body.ResponseSize = int64(len(body))
 		out.Body.Truncated = e.Truncated
-		out.Body.Done = !e.EndedAt.IsZero()
+		out.Body.Done = done
 		out.Body.StatusCode = e.StatusCode
 		return out, nil
 	}
+}
+
+// alignRuneStart returns the largest index <= i that begins a UTF-8 rune in s
+// (or 0 / len(s) at the bounds). A UTF-8 continuation byte is 10xxxxxx; rune
+// starts are everything else, and a valid rune is at most 4 bytes, so scanning
+// back at most 3 bytes always finds a boundary. Used by the tail handler so a
+// byte offset that landed mid-rune doesn't split a multi-byte character.
+func alignRuneStart(s string, i int64) int64 {
+	if i <= 0 {
+		return 0
+	}
+	if i >= int64(len(s)) {
+		return int64(len(s))
+	}
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
+}
+
+// lastCompleteRuneEnd returns the index just past the last fully-formed UTF-8
+// rune in s, dropping a trailing partial rune (a multi-byte sequence whose tail
+// hasn't arrived yet on a still-growing stream). It backs up from the end to the
+// final rune start, then decodes that rune: if it is the Unicode replacement
+// rune produced by an incomplete/invalid sequence reaching the end of s, the
+// rune is excluded; otherwise it is kept. A valid rune is at most 4 bytes, so
+// the back-scan is bounded. Empty input returns 0.
+func lastCompleteRuneEnd(s string) int64 {
+	if len(s) == 0 {
+		return 0
+	}
+	// Find the start of the last rune.
+	start := len(s) - 1
+	for start > 0 && !utf8.RuneStart(s[start]) {
+		start--
+	}
+	r, size := utf8.DecodeRuneInString(s[start:])
+	// DecodeRuneInString yields (RuneError, 1) for an incomplete trailing
+	// sequence. Distinguish a genuine U+FFFD (which decodes with size 3) from a
+	// truncated tail (size 1) so we only trim real partials.
+	if r == utf8.RuneError && size == 1 {
+		return int64(start)
+	}
+	return int64(len(s))
 }
 
 type GetTrafficInput struct {
@@ -825,7 +897,7 @@ func writeTrafficStream(ctx huma.Context, st *store.Store, agg *session.Aggregat
 				delete(dirty, id)
 			}
 		case <-reconcile.C:
-			// Backstop dropped finalize broadcasts and prune sentTerminal of
+			// Backstop dropped finalize broadcasts and prune bookkeeping of
 			// entries that have been evicted from the ring buffer.
 			present := make(map[string]struct{})
 			for _, e := range st.List() {
@@ -845,6 +917,15 @@ func writeTrafficStream(ctx huma.Context, st *store.Store, agg *session.Aggregat
 			for id := range sentTerminal {
 				if _, ok := present[id]; !ok {
 					delete(sentTerminal, id)
+				}
+			}
+			// Drop dirty (non-terminal) snapshots whose entry the store has since
+			// evicted. Without this a ghost entry — dirtied, then evicted before
+			// its flush tick — would be re-broadcast on every flush forever,
+			// resurrecting an entry the renderer already trimmed from its list.
+			for id := range dirty {
+				if _, ok := present[id]; !ok {
+					delete(dirty, id)
 				}
 			}
 		case _, ok := <-sessCh:

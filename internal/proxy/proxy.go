@@ -269,6 +269,17 @@ func lowerKeys(h map[string]string) map[string]string {
 // doubles each time — see capture.
 const firstAnalyzeBytes = 64 * 1024
 
+// flushSnapshotInterval bounds how often capture materializes the accumulated
+// body into a fresh string for the store Update. Taking captured.String() on
+// EVERY ~32 KiB chunk is an O(captured-size) copy, so a long stream pays
+// O(size²/chunk) total — the streaming hot path's biggest amplifier. Throttling
+// the snapshot to a wall-clock tick bounds the copies to O(size × duration /
+// interval) of fixed-cost work while still giving the UI live progress (the
+// per-entry tail polls at ~10 Hz, so a 150 ms snapshot cadence is below the
+// renderer's own refresh rate). The final, authoritative snapshot always runs
+// at EOF/error regardless of the timer.
+const flushSnapshotInterval = 150 * time.Millisecond
+
 // capture copies body into the store entry's ResponseBody and, when client is
 // non-nil, simultaneously streams it back to the client. Each ~32 KiB chunk
 // triggers a flush + store update so the UI sees streaming progress (raw bytes;
@@ -302,6 +313,28 @@ func capture(ctx context.Context, body io.Reader, entryID string, st *store.Stor
 	// chunk always fires; thereafter it doubles, bounding total analysis work to
 	// O(final size).
 	var nextAnalyzeLen int
+	// lastSnapshot throttles the O(captured-size) captured.String() copy + store
+	// Update to flushSnapshotInterval. The final snapshot at EOF/error/abort is
+	// unconditional, so nothing the client sees is lost — only the intermediate
+	// progress ticks are coalesced.
+	var lastSnapshot time.Time
+
+	// finalize takes the authoritative snapshot and writes it once. setErr lets
+	// the EOF/abort paths share the same closure while still recording a genuine
+	// transport error (client-abort terminations stay error-free).
+	finalize := func(setErr string) {
+		snapshot := captured.String()
+		st.Update(entryID, func(e *store.Entry) {
+			if setErr != "" {
+				e.Error = setErr
+			}
+			e.ResponseBody = snapshot
+			e.ResponseSize = totalBytes
+			if truncated {
+				e.Truncated = true
+			}
+		})
+	}
 
 	for {
 		n, err := body.Read(buf)
@@ -309,13 +342,11 @@ func capture(ctx context.Context, body io.Reader, entryID string, st *store.Stor
 			totalBytes += int64(n)
 			if client != nil {
 				if _, werr := client.Write(buf[:n]); werr != nil {
-					st.Update(entryID, func(e *store.Entry) {
-						if !isClientAbort(ctx, werr) {
-							e.Error = "write to client: " + werr.Error()
-						}
-						e.ResponseBody = captured.String()
-						e.ResponseSize = totalBytes
-					})
+					setErr := ""
+					if !isClientAbort(ctx, werr) {
+						setErr = "write to client: " + werr.Error()
+					}
+					finalize(setErr)
 					return
 				}
 				if flusher != nil {
@@ -341,32 +372,36 @@ func capture(ctx context.Context, body io.Reader, entryID string, st *store.Stor
 					nextAnalyzeLen = firstAnalyzeBytes
 				}
 			}
-			// Periodic snapshot so the UI sees live progress. We batch the
-			// optional Analyze into the same Update so each chunk produces at
-			// most one SSE broadcast.
-			snapshot := captured.String()
-			st.Update(entryID, func(e *store.Entry) {
-				e.ResponseBody = snapshot
-				e.ResponseSize = totalBytes
-				if truncated {
-					e.Truncated = true
-				}
-				if shouldAnalyze {
-					runAnalysis(e)
-				}
-			})
+			// Snapshot for live UI progress, throttled to a wall-clock tick so we
+			// don't pay an O(captured-size) string copy on every chunk. An analysis
+			// tick forces a snapshot regardless (it needs the body to parse), so the
+			// structured view still fills in on its geometric schedule.
+			now := time.Now()
+			if shouldAnalyze || now.Sub(lastSnapshot) >= flushSnapshotInterval {
+				lastSnapshot = now
+				snapshot := captured.String()
+				st.Update(entryID, func(e *store.Entry) {
+					e.ResponseBody = snapshot
+					e.ResponseSize = totalBytes
+					if truncated {
+						e.Truncated = true
+					}
+					if shouldAnalyze {
+						runAnalysis(e)
+					}
+				})
+			}
 		}
 		if errors.Is(err, io.EOF) {
+			finalize("")
 			return
 		}
 		if err != nil {
-			st.Update(entryID, func(e *store.Entry) {
-				if !isClientAbort(ctx, err) {
-					e.Error = "read upstream: " + err.Error()
-				}
-				e.ResponseBody = captured.String()
-				e.ResponseSize = totalBytes
-			})
+			setErr := ""
+			if !isClientAbort(ctx, err) {
+				setErr = "read upstream: " + err.Error()
+			}
+			finalize(setErr)
 			return
 		}
 	}
@@ -401,8 +436,27 @@ func buildUpstreamURL(base string, incoming *url.URL) (*url.URL, error) {
 	}
 	target := *baseURL
 	target.Path = singleSlashJoin(baseURL.Path, incoming.Path)
-	target.RawQuery = incoming.RawQuery
+	target.RawQuery = mergeRawQuery(baseURL.RawQuery, incoming.RawQuery)
 	return &target, nil
+}
+
+// mergeRawQuery combines the query string baked into the configured baseURL with
+// the one on the incoming request. A gateway baseURL often carries its own
+// params (e.g. ?api-version=… for Azure-style endpoints); the old code dropped
+// them by overwriting RawQuery with the incoming query. We keep both, with the
+// incoming request's params appended after the base's so a per-request value
+// wins on the upstream's last-one-wins parsing while the base default is still
+// present. Empty sides short-circuit so the common no-base-query case is
+// unchanged.
+func mergeRawQuery(base, incoming string) string {
+	switch {
+	case base == "":
+		return incoming
+	case incoming == "":
+		return base
+	default:
+		return base + "&" + incoming
+	}
 }
 
 func singleSlashJoin(a, b string) string {

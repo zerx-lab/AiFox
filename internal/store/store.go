@@ -68,6 +68,14 @@ type Entry struct {
 // MaxBodyBytes caps the per-direction body size we keep in memory.
 const MaxBodyBytes = 1 << 20 // 1 MiB
 
+// DefaultByteBudget bounds the total request+response body bytes the ring
+// buffer keeps resident, on top of the per-count capacity. A long-running
+// desktop process that captures 500 entries each near the 1 MiB per-direction
+// cap would otherwise pin ~1 GB; the budget evicts the oldest entries early so
+// memory stays bounded by content size, not just entry count. It is a compile
+// time constant (not a user setting) so the wire schema is unaffected.
+const DefaultByteBudget = 256 << 20 // 256 MiB
+
 // clone returns an immutable snapshot of e suitable for handing to readers
 // outside the store lock. It is a shallow struct copy, which is race-safe
 // ONLY because of three invariants the rest of the codebase upholds:
@@ -99,6 +107,14 @@ type Store struct {
 	// idIndex maps Entry.ID to its slot to avoid linear lookup in Get.
 	idIndex map[string]*Entry
 
+	// byteBudget caps the total body bytes resident across all retained entries.
+	// curBytes is the running sum and entryBytes records each entry's last
+	// accounted size so Update can apply a delta (a streaming entry's body grows
+	// chunk by chunk). All three are guarded by mu.
+	byteBudget int64
+	curBytes   int64
+	entryBytes map[string]int64
+
 	subsMu sync.RWMutex
 	subs   map[int]chan *Entry
 	nextID atomic.Uint64
@@ -115,16 +131,19 @@ type Store struct {
 	persisted map[string]struct{}
 }
 
-// New returns a Store that retains the most recent `capacity` entries.
+// New returns a Store that retains the most recent `capacity` entries, bounded
+// additionally by DefaultByteBudget total body bytes.
 func New(capacity int) *Store {
 	if capacity <= 0 {
 		capacity = 200
 	}
 	return &Store{
-		capacity: capacity,
-		entries:  make([]*Entry, 0, capacity),
-		idIndex:  make(map[string]*Entry, capacity),
-		subs:     make(map[int]chan *Entry),
+		capacity:   capacity,
+		byteBudget: DefaultByteBudget,
+		entries:    make([]*Entry, 0, capacity),
+		idIndex:    make(map[string]*Entry, capacity),
+		entryBytes: make(map[string]int64, capacity),
+		subs:       make(map[int]chan *Entry),
 	}
 }
 
@@ -158,17 +177,17 @@ func (s *Store) NextID() string {
 func (s *Store) Add(e *Entry) {
 	s.mu.Lock()
 	if len(s.entries) >= s.capacity {
-		evicted := s.entries[0]
-		s.entries = s.entries[1:]
-		delete(s.idIndex, evicted.ID)
-		// Drop the persisted-dedup marker too, otherwise this map grows without
-		// bound over the lifetime of a long-running desktop process even though
-		// the entry is no longer retained. The on-disk JSONL line stays (the
-		// file is the durable record); only the in-memory dedup hint is cleared.
-		delete(s.persisted, evicted.ID)
+		s.evictOldestLocked()
 	}
 	s.entries = append(s.entries, e)
 	s.idIndex[e.ID] = e
+	sz := entrySize(e)
+	s.entryBytes[e.ID] = sz
+	s.curBytes += sz
+	// Byte-budget eviction: a fresh entry can push the buffer over the budget
+	// (e.g. a 1 MiB request body). Evict from the oldest end until we're back
+	// under budget, but never evict the entry we just added — keep at least it.
+	s.evictToBudgetLocked(e.ID)
 	shouldPersist := s.markPersistableLocked(e)
 	// Snapshot under the lock so subscribers never touch the live pointer the
 	// proxy keeps mutating. See Entry.clone for why this is race-safe.
@@ -181,6 +200,50 @@ func (s *Store) Add(e *Entry) {
 	s.broadcast(snap)
 }
 
+// entrySize estimates an entry's resident body cost: the request + response
+// body lengths. Headers/analysis are small and bounded relative to bodies, so
+// the budget tracks the dominant term only.
+func entrySize(e *Entry) int64 {
+	if e == nil {
+		return 0
+	}
+	return int64(len(e.RequestBody)) + int64(len(e.ResponseBody))
+}
+
+// evictOldestLocked removes the oldest entry and clears every per-entry index
+// for it (idIndex, persisted-dedup marker, byte accounting). Caller must hold
+// s.mu and ensure len(s.entries) > 0.
+func (s *Store) evictOldestLocked() {
+	evicted := s.entries[0]
+	s.entries = s.entries[1:]
+	delete(s.idIndex, evicted.ID)
+	// Drop the persisted-dedup marker too, otherwise this map grows without
+	// bound over the lifetime of a long-running desktop process even though
+	// the entry is no longer retained. The on-disk JSONL line stays (the
+	// file is the durable record); only the in-memory dedup hint is cleared.
+	delete(s.persisted, evicted.ID)
+	s.curBytes -= s.entryBytes[evicted.ID]
+	delete(s.entryBytes, evicted.ID)
+}
+
+// evictToBudgetLocked evicts oldest entries until total body bytes are within
+// budget, but never evicts keepID (the entry just added/updated) and always
+// leaves at least one entry. Caller must hold s.mu.
+func (s *Store) evictToBudgetLocked(keepID string) {
+	if s.byteBudget <= 0 {
+		return
+	}
+	for s.curBytes > s.byteBudget && len(s.entries) > 1 {
+		if s.entries[0].ID == keepID {
+			// The over-budget entry is the one we must keep; nothing older to
+			// drop without evicting it. Stop — a single huge entry is allowed to
+			// exceed the budget rather than be discarded the moment it lands.
+			break
+		}
+		s.evictOldestLocked()
+	}
+}
+
 // Update applies fn to the entry identified by id and re-broadcasts it.
 // If the entry was already evicted, Update is a no-op.
 func (s *Store) Update(id string, fn func(*Entry)) {
@@ -190,6 +253,13 @@ func (s *Store) Update(id string, fn func(*Entry)) {
 	var snap *Entry
 	if ok {
 		fn(e)
+		// A streaming Update grows ResponseBody, so re-account the entry's size
+		// and rebalance the budget. Evict from the oldest end (never this entry —
+		// it's the one actively streaming) if the growth pushed us over.
+		newSize := entrySize(e)
+		s.curBytes += newSize - s.entryBytes[id]
+		s.entryBytes[id] = newSize
+		s.evictToBudgetLocked(id)
 		shouldPersist = s.markPersistableLocked(e)
 		snap = e.clone()
 	}
@@ -236,6 +306,10 @@ func (s *Store) Clear() {
 	for k := range s.idIndex {
 		delete(s.idIndex, k)
 	}
+	for k := range s.entryBytes {
+		delete(s.entryBytes, k)
+	}
+	s.curBytes = 0
 	if s.persisted != nil {
 		for k := range s.persisted {
 			delete(s.persisted, k)
@@ -421,11 +495,18 @@ func (s *Store) bootstrap() error {
 		e := byID[id]
 		s.entries = append(s.entries, e)
 		s.idIndex[e.ID] = e
+		sz := entrySize(e)
+		s.entryBytes[e.ID] = sz
+		s.curBytes += sz
 		s.persisted[e.ID] = struct{}{}
 		if n, ok := parseID(e.ID); ok && n > maxSeq {
 			maxSeq = n
 		}
 	}
+	// Restored entries can exceed the byte budget (the on-disk count cap is the
+	// only one bootstrap applies above). Trim the oldest until we're in budget so
+	// a fresh boot starts within the same memory bound a running process holds.
+	s.evictToBudgetLocked("")
 	// Track every observed ID so a re-append after a partial truncation
 	// doesn't duplicate the row.
 	for id := range byID {

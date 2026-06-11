@@ -11,6 +11,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -103,15 +104,35 @@ type Store struct {
 	mu       sync.RWMutex
 	settings Settings
 	path     string
+	// cipher encrypts/decrypts the API key at rest. Never nil after Open: when
+	// the OS keyring is unavailable it is a disabled cipher that passes the key
+	// through as plaintext (graceful degradation, warned once on Open).
+	cipher *secretCipher
 }
 
 // Open loads settings from `path` (creating the parent dir if missing). A
-// non-existent file produces an empty Settings, not an error.
+// non-existent file produces an empty Settings, not an error. The API key is
+// transparently encrypted at rest via the OS keyring; if the keyring is
+// unavailable Open degrades to plaintext storage and warns once on stderr.
 func Open(path string) (*Store, error) {
+	return openWithKeyring(path, osKeyring{})
+}
+
+// openWithKeyring is the testable core of Open: it takes the keyringProvider so
+// tests can inject a fake (or a deliberately broken one) without touching the
+// real OS credential store. Production callers go through Open.
+func openWithKeyring(path string, kr keyringProvider) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("config path is required")
 	}
-	s := &Store{path: path}
+	cipher, cerr := newSecretCipher(kr)
+	if cerr != nil {
+		// Keyring unusable: cipher is disabled (plaintext passthrough). Warn once
+		// so the operator knows the key isn't encrypted at rest, then carry on —
+		// key storage must never block the app from starting.
+		warnDegraded(cerr)
+	}
+	s := &Store{path: path, cipher: cipher}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -144,9 +165,8 @@ func (s *Store) Set(next Settings) error {
 	s.mu.Lock()
 	s.settings = normalize(next)
 	snapshot := s.settings
-	path := s.path
 	s.mu.Unlock()
-	return write(path, snapshot)
+	return s.write(snapshot)
 }
 
 // SetLayout updates ONLY the persisted layout geometry, leaving every other
@@ -158,9 +178,8 @@ func (s *Store) SetLayout(l Layout) error {
 	s.mu.Lock()
 	s.settings.Layout = normalizeLayout(l)
 	snapshot := s.settings
-	path := s.path
 	s.mu.Unlock()
-	return write(path, snapshot)
+	return s.write(snapshot)
 }
 
 func (s *Store) load() error {
@@ -178,6 +197,18 @@ func (s *Store) load() error {
 		// let the user fix or overwrite it via the settings dialog.
 		s.settings = defaults()
 		return nil
+	}
+	// Decrypt the API key in place. A legacy plaintext value (no enc prefix)
+	// passes through unchanged and will be upgraded to ciphertext on the next
+	// save. A prefixed-but-corrupt value (bad base64, truncated, wrong key)
+	// drops ONLY the apiKey — the rest of the settings stay usable — and warns,
+	// rather than discarding the whole file.
+	plain, derr := s.cipher.decrypt(loaded.UpstreamAPIKey)
+	if derr != nil {
+		log.Printf("ai-fox: stored API key could not be decrypted, clearing it (%v)", derr)
+		loaded.UpstreamAPIKey = ""
+	} else {
+		loaded.UpstreamAPIKey = plain
 	}
 	s.settings = normalize(loaded)
 	return nil
@@ -242,14 +273,25 @@ func clampGeom(v, min, max int) int {
 	return v
 }
 
-func write(path string, s Settings) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+// write encrypts the API key and persists the settings to disk at 0600. The
+// in-memory Settings always carry the decrypted plaintext key, so every write
+// re-seals it: this is also what upgrades a legacy plaintext file to ciphertext
+// the first time the user saves. When the cipher is disabled (no keyring) encrypt
+// returns the key unchanged, so we fall back to plaintext-at-rest transparently.
+func (s *Store) write(settings Settings) error {
+	enc, err := s.cipher.encrypt(settings.UpstreamAPIKey)
+	if err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(s, "", "  ")
+	settings.UpstreamAPIKey = enc
+
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
 	// 0600: only the current user should be able to read the API key.
-	return os.WriteFile(path, raw, 0o600)
+	return os.WriteFile(s.path, raw, 0o600)
 }

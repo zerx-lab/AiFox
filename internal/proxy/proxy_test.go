@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -645,5 +646,65 @@ func TestConnectionHeaderHopByHopStripped(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("upstream never received the request")
+	}
+}
+
+// TestBuildUpstreamURLMergesBaseQuery verifies buildUpstreamURL keeps query
+// params baked into the configured baseURL (e.g. Azure-style ?api-version=…)
+// instead of overwriting them with the incoming request's query.
+func TestBuildUpstreamURLMergesBaseQuery(t *testing.T) {
+	cases := []struct {
+		name     string
+		base     string
+		incoming string // raw request URI (path?query)
+		wantPath string
+		wantQ    string
+	}{
+		{
+			name:     "base query preserved when incoming has none",
+			base:     "https://example.azure.com/openai?api-version=2024-02-01",
+			incoming: "/v1/chat/completions",
+			wantPath: "/openai/v1/chat/completions",
+			wantQ:    "api-version=2024-02-01",
+		},
+		{
+			name:     "base and incoming queries both kept, incoming last",
+			base:     "https://example.azure.com/openai?api-version=2024-02-01",
+			incoming: "/v1/chat/completions?stream=true",
+			wantPath: "/openai/v1/chat/completions",
+			wantQ:    "api-version=2024-02-01&stream=true",
+		},
+		{
+			name:     "no base query, incoming preserved (regression guard)",
+			base:     "https://api.openai.com",
+			incoming: "/v1/models?limit=5",
+			wantPath: "/v1/models",
+			wantQ:    "limit=5",
+		},
+		{
+			name:     "neither has a query",
+			base:     "https://api.openai.com",
+			incoming: "/v1/models",
+			wantPath: "/v1/models",
+			wantQ:    "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			incoming, err := url.ParseRequestURI(tc.incoming)
+			if err != nil {
+				t.Fatalf("parse incoming: %v", err)
+			}
+			got, err := buildUpstreamURL(tc.base, incoming)
+			if err != nil {
+				t.Fatalf("buildUpstreamURL: %v", err)
+			}
+			if got.Path != tc.wantPath {
+				t.Fatalf("path = %q, want %q", got.Path, tc.wantPath)
+			}
+			if got.RawQuery != tc.wantQ {
+				t.Fatalf("query = %q, want %q", got.RawQuery, tc.wantQ)
+			}
+		})
 	}
 }
