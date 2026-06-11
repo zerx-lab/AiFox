@@ -193,6 +193,7 @@ export const zhCN: Dictionary = {
     themeDark: "深色",
     themeLight: "浅色",
     save: "保存",
+    saving: "保存中…",
     saved: "已保存。",
     saveFailed: "保存失败：{error}",
   },
@@ -202,6 +203,8 @@ export const zhCN: Dictionary = {
     notListening: "未连接 —— 点击「连接」启动代理",
     tokens: "{total} tok",
     cached: "命中缓存 {pct}%",
+    sseDisconnected: "已断开",
+    sseReconnecting: "重连中…",
   },
   filter: {
     streaming: "流式",

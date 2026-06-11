@@ -17,13 +17,13 @@ import {
   type CenterView,
   type EntryMeta,
   getState,
+  selectedFull,
   selectMessage,
   selectToolUse,
   setCenterView,
-  selectedFull,
   setState,
-  toggleMessageExpanded,
   type TrafficEntry,
+  toggleMessageExpanded,
 } from "./state";
 
 type Analysis = components["schemas"]["Analysis"];

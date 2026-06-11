@@ -5,7 +5,7 @@
 // The handshake is the single source of truth for how the renderer reaches
 // the backend. Never hard-code the port: it is chosen by the OS at runtime.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { app } from "electron";

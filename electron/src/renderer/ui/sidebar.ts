@@ -13,15 +13,15 @@ import { fmtDuration, fmtSessionStamp, fmtTime, statusKind } from "./format";
 import { applyFilter } from "./grouping";
 import {
   clearEntries,
+  type EntryMeta,
   getState,
+  type SessionSummary,
   selectSession,
   setFilters,
   setRenamingSession,
   setState,
   toggleGroupCollapsed,
   toggleSessionExpanded,
-  type EntryMeta,
-  type SessionSummary,
 } from "./state";
 
 export function renderSidebar(): HTMLElement {

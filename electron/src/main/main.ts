@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme } from "electron";
 import { type FSWatcher, watch as fsWatch } from "node:fs";
 import { stat as fsStat } from "node:fs/promises";
 import { join } from "node:path";
-import { startBackend, type Backend } from "./backend";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme } from "electron";
+import { type Backend, startBackend } from "./backend";
 
 // Boot trace: emit labelled deltas to stderr when RELAY_BOOT_TRACE=1. Used to
 // measure cold-start phase distribution without shipping the noise to users.

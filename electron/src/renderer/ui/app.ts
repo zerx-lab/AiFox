@@ -21,11 +21,11 @@ import { clear, h } from "./dom";
 import { renderFilterPills } from "./filter";
 import { renderSettings } from "./settings";
 import { renderSidebar } from "./sidebar";
+import { getState, onChange, versions } from "./state";
 import { renderStatusbar } from "./statusbar";
 import { renderTimeline } from "./timeline";
 import { renderTitlebar } from "./titlebar";
 import { renderTopbar } from "./topbar";
-import { getState, onChange, versions } from "./state";
 
 type VKind = keyof typeof versions;
 
@@ -49,7 +49,12 @@ const SCROLL_SELECTORS = [
 ] as const;
 // Log-tail containers: if the user was at the bottom, re-stick to the bottom
 // after a rebuild so appended content scrolls into view.
-const STICKY_BOTTOM: ReadonlySet<string> = new Set([".bottom-body"]);
+const STICKY_BOTTOM: ReadonlySet<string> = new Set([".bottom-body", ".tl-body"]);
+
+// Pin-to-top containers: new items are prepended (inserted at head). If the
+// user was scrolled to the top, keep them there so the latest entry is visible.
+const STICKY_TOP: ReadonlySet<string> = new Set([".side-list"]);
+const STICKY_TOP_THRESHOLD_PX = 4;
 const STICKY_THRESHOLD_PX = 4;
 
 export function mountApp(root: HTMLElement) {
@@ -258,6 +263,7 @@ function holdsEditingFocus(scope: HTMLElement): boolean {
 interface ScrollSnap {
   top: number;
   atBottom: boolean;
+  atTop: boolean;
 }
 
 // Snapshot scroll positions WITHIN a region's element (so a rebuilt region
@@ -271,7 +277,8 @@ function snapshotScrolls(scope: HTMLElement): Record<string, ScrollSnap> {
     const atBottom =
       STICKY_BOTTOM.has(sel) &&
       el.scrollHeight - el.scrollTop - el.clientHeight <= STICKY_THRESHOLD_PX;
-    out[sel] = { top: el.scrollTop, atBottom };
+    const atTop = STICKY_TOP.has(sel) && el.scrollTop <= STICKY_TOP_THRESHOLD_PX;
+    out[sel] = { top: el.scrollTop, atBottom, atTop };
   }
   return out;
 }
@@ -282,6 +289,7 @@ function restoreScrolls(scope: HTMLElement, scrolls: Record<string, ScrollSnap>)
     const snap = scrolls[sel];
     if (!el || !snap) continue;
     if (snap.atBottom) el.scrollTop = el.scrollHeight;
+    else if (snap.atTop && STICKY_TOP.has(sel)) el.scrollTop = 0;
     else el.scrollTop = snap.top;
   }
 }

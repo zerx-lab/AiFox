@@ -23,9 +23,19 @@ export interface SseHandle {
 
 export type SseHandler = (ev: SseEvent) => void;
 
+/** Callback invoked when the SSE stream ends or errors (not called when
+ *  close() is used intentionally). */
+export type SseCloseHandler = () => void;
+
 /** Subscribe to a streaming endpoint on the backend. The returned handle's
- *  close() aborts the underlying fetch and stops the parser loop. */
-export async function openSse(path: string, onEvent: SseHandler): Promise<SseHandle> {
+ *  close() aborts the underlying fetch and stops the parser loop.
+ *  onClose is called when the stream ends unexpectedly (error or server
+ *  disconnect) so the caller can implement reconnection. */
+export async function openSse(
+  path: string,
+  onEvent: SseHandler,
+  onClose?: SseCloseHandler,
+): Promise<SseHandle> {
   const hs = await getHandshake();
   const ctrl = new AbortController();
   const url = hs.baseUrl.replace(/\/$/, "") + path;
@@ -38,8 +48,7 @@ export async function openSse(path: string, onEvent: SseHandler): Promise<SseHan
     },
   };
 
-  // Fire-and-forget; reconnection is the caller's job (the UI hangs a fresh
-  // listener after `task dev` hot-reload).
+  // Fire-and-forget; reconnection is the caller's job.
   void (async () => {
     try {
       const resp = await fetch(url, {
@@ -47,6 +56,7 @@ export async function openSse(path: string, onEvent: SseHandler): Promise<SseHan
         signal: ctrl.signal,
       });
       if (!resp.ok || !resp.body) {
+        if (!stopped) onClose?.();
         return;
       }
       const reader = resp.body.getReader();
@@ -67,9 +77,10 @@ export async function openSse(path: string, onEvent: SseHandler): Promise<SseHan
         }
       }
     } catch (_err) {
-      // Aborted fetch throws; that's expected on close. Other errors are
-      // intentionally swallowed — the proxy still works without live updates.
+      // Aborted fetch throws; that's expected on close. Other errors signal
+      // an unexpected disconnect — notify the caller.
     }
+    if (!stopped) onClose?.();
   })();
 
   return handle;

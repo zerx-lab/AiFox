@@ -9,7 +9,7 @@
 import { t } from "../i18n";
 import { h } from "./dom";
 import { fmtClock, fmtDuration } from "./format";
-import { getState, setState, type EntryMeta } from "./state";
+import { type EntryMeta, getState, setState } from "./state";
 
 type Level = "info" | "warn" | "err";
 

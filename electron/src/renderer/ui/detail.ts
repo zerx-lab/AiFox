@@ -11,11 +11,11 @@ import { h } from "./dom";
 import { fmtBytes, fmtClock, fmtDuration, isPending } from "./format";
 import { renderRawRequest, renderRawResponse } from "./raw-http";
 import {
+  type DetailTab,
   getState,
+  type SessionSummary,
   selectedFull,
   setDetailTab,
-  type DetailTab,
-  type SessionSummary,
   type TrafficEntry,
 } from "./state";
 
@@ -25,6 +25,7 @@ type DetailHeadFields = Pick<
   TrafficEntry,
   "method" | "url" | "statusCode" | "durationMillis" | "startedAt" | "streaming"
 >;
+
 import { renderTokens } from "./tokens";
 import { renderTools } from "./tools";
 

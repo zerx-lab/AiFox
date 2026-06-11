@@ -11,12 +11,12 @@
 // edge on macOS where there are no controls). Buttons sit outside the drag
 // region (`no-drag`) so clicks reach them.
 
+import { getClient } from "../../api/client";
 import { getLanguage, setLanguage, supportedLanguages, t } from "../i18n";
 import { h } from "./dom";
 import { customSelect, type SelectOption } from "./select";
-import { getState, setState, type Settings } from "./state";
+import { getState, type Settings, setState } from "./state";
 import { setTheme, type ThemeChoice } from "./theme";
-import { getClient } from "../../api/client";
 
 export function renderTitlebar(): HTMLElement {
   const isMac = getState().env?.platform === "darwin";

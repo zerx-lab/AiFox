@@ -36,10 +36,25 @@ export function renderStatusbar(): HTMLElement {
     gearIcon(),
   );
 
+  // SSE connection indicator — only shown when disconnected or reconnecting.
+  const connEl =
+    s.connection !== "live"
+      ? h(
+          "span.sse-status",
+          { class: "sse-status sse-disconnected" },
+          h("span.sse-dot", null),
+          s.connection === "reconnecting"
+            ? t("status.sseReconnecting")
+            : t("status.sseDisconnected"),
+        )
+      : null;
+
   return h(
     "div.statusbar",
     null,
     settingsBtn,
+    connEl,
+    connEl ? h("span", null, "·") : null,
     h("span", { class: s.proxy?.configured ? "ok" : "warn" }, proxyText),
     h("span", null, "·"),
     h("span", null, t("status.entries", { count: total })),

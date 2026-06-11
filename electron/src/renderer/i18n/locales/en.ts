@@ -194,6 +194,7 @@ export const en = {
     themeDark: "Dark",
     themeLight: "Light",
     save: "Save",
+    saving: "Saving…",
     saved: "Settings saved.",
     saveFailed: "Save failed: {error}",
   },
@@ -203,6 +204,8 @@ export const en = {
     notListening: "Disconnected — press Connect to start the proxy",
     tokens: "{total} tok",
     cached: "{pct}% cached",
+    sseDisconnected: "Disconnected",
+    sseReconnecting: "Reconnecting…",
   },
   filter: {
     streaming: "streaming",

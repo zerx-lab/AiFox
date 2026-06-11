@@ -70,9 +70,9 @@ export async function getHandshake(): Promise<Handshake> {
   return cachedHandshake;
 }
 
+
+// Re-export the schema types for callers that need them directly.
+export type { components, operations, paths } from "./schema";
 /** Auth header constant for callers that talk to the backend without openapi-fetch
  *  (notably the SSE EventSource, which has no auth-header API). */
 export { AUTH_HEADER };
-
-// Re-export the schema types for callers that need them directly.
-export type { paths, components, operations } from "./schema";

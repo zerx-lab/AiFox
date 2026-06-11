@@ -13,11 +13,15 @@ import {
   replaceBreakpoints,
   replaceEntries,
   replaceSessions,
+  type SessionSummary,
   setState,
   upsertEntry,
-  type SessionSummary,
 } from "./ui/state";
 import { initTheme, setTheme, type ThemeChoice } from "./ui/theme";
+
+// SSE reconnection constants (exponential backoff).
+const SSE_BACKOFF_INITIAL_MS = 1_000;
+const SSE_BACKOFF_MAX_MS = 30_000;
 
 async function bootstrap() {
   const root = document.getElementById("root");
@@ -68,8 +72,19 @@ async function bootstrap() {
   // The SSE stream sends a "snapshot" of the current buffer on connect, then
   // "entry" events for every new or updated capture (lightweight EntryMeta —
   // bodies are fetched per entry on selection). No separate initial GET needed.
-  void openSse("/v1/traffic/stream", (ev) => {
+  //
+  // subscribeTrafficStream wraps openSse with exponential-backoff reconnection.
+  // On reconnect the server sends a fresh "snapshot" event that naturally
+  // reconciles client state, so no additional recovery logic is needed here.
+  let sseBackoffMs = SSE_BACKOFF_INITIAL_MS;
+  let sseTimer: ReturnType<typeof setTimeout> | null = null;
+  let sseStopped = false;
+
+  function handleSseEvent(ev: { event: string; data: string }) {
     if (ev.event === "snapshot") {
+      // Back online — clear reconnecting indicator.
+      setState({ connection: "live" });
+      sseBackoffMs = SSE_BACKOFF_INITIAL_MS;
       const items = JSON.parse(ev.data) as EntryMeta[];
       replaceEntries(items);
     } else if (ev.event === "entry") {
@@ -85,7 +100,33 @@ async function bootstrap() {
       };
       replaceBreakpoints(payload.items ?? [], payload.paused ?? []);
     }
-  });
+  }
+
+  function scheduleReconnect() {
+    if (sseStopped) return;
+    setState({ connection: "reconnecting" });
+    sseTimer = setTimeout(() => {
+      sseTimer = null;
+      void connectSse();
+    }, sseBackoffMs);
+    // Double backoff, cap at max.
+    sseBackoffMs = Math.min(sseBackoffMs * 2, SSE_BACKOFF_MAX_MS);
+  }
+
+  async function connectSse() {
+    if (sseStopped) return;
+    await openSse("/v1/traffic/stream", handleSseEvent, scheduleReconnect);
+  }
+
+  void connectSse();
+
+  // Expose a cleanup hook for HMR / test teardown (dev only, best-effort).
+  if (typeof window !== "undefined") {
+    (window as unknown as Record<string, unknown>).__aifox_stopSse = () => {
+      sseStopped = true;
+      if (sseTimer !== null) clearTimeout(sseTimer);
+    };
+  }
 }
 
 bootstrap().catch((err) => {

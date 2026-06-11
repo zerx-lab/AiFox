@@ -84,6 +84,34 @@ export function customSelect(opts: SelectOpts): HTMLElement {
   root.appendChild(menu);
 
   let open = false;
+  let docCtrl: AbortController | null = null;
+
+  const close = () => setOpen(false);
+
+  const onDocMouseDown = (e: MouseEvent) => {
+    // If our root was removed from the DOM, abort and clean up.
+    if (!root.isConnected) {
+      docCtrl?.abort();
+      docCtrl = null;
+      open = false;
+      return;
+    }
+    if (!root.contains(e.target as Node)) close();
+  };
+  const onKey = (e: KeyboardEvent) => {
+    // If our root was removed from the DOM, abort and clean up.
+    if (!root.isConnected) {
+      docCtrl?.abort();
+      docCtrl = null;
+      open = false;
+      return;
+    }
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+    }
+  };
+
   const setOpen = (v: boolean) => {
     if (v === open) return;
     open = v;
@@ -91,23 +119,18 @@ export function customSelect(opts: SelectOpts): HTMLElement {
     trigger.setAttribute("aria-expanded", v ? "true" : "false");
     menu.setAttribute("aria-hidden", v ? "false" : "true");
     if (v) {
-      document.addEventListener("mousedown", onDocMouseDown, true);
-      document.addEventListener("keydown", onKey, true);
+      // Each open creates a fresh AbortController so multiple instances never
+      // share signal state and cleanup is always paired with an open.
+      docCtrl = new AbortController();
+      const { signal } = docCtrl;
+      document.addEventListener("mousedown", onDocMouseDown, { capture: true, signal });
+      document.addEventListener("keydown", onKey, { capture: true, signal });
     } else {
-      document.removeEventListener("mousedown", onDocMouseDown, true);
-      document.removeEventListener("keydown", onKey, true);
+      docCtrl?.abort();
+      docCtrl = null;
     }
   };
-  const close = () => setOpen(false);
-  const onDocMouseDown = (e: MouseEvent) => {
-    if (!root.contains(e.target as Node)) close();
-  };
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      close();
-    }
-  };
+
   trigger.addEventListener("click", (e) => {
     e.stopPropagation();
     setOpen(!open);

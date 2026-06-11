@@ -19,6 +19,8 @@ export type PausedRequest = components["schemas"]["Paused"];
 
 export type View = "traffic" | "settings";
 
+export type ConnectionStatus = "live" | "reconnecting";
+
 export type DetailTab =
   | "overview"
   | "cache"
@@ -107,6 +109,7 @@ export interface AppState {
   settings: Settings | null;
   env: Env | null;
   windowMaximized: boolean;
+  connection: ConnectionStatus;
 }
 
 type Listener = (s: AppState) => void;
@@ -141,6 +144,7 @@ const state: AppState = {
   settings: null,
   env: null,
   windowMaximized: false,
+  connection: "live",
 };
 
 const listeners = new Set<Listener>();
@@ -214,6 +218,7 @@ const KEY_VERSION: Record<keyof AppState, VKind> = {
   settings: "ui",
   env: "ui",
   windowMaximized: "ui",
+  connection: "ui",
 };
 
 export function getState(): AppState {
@@ -376,6 +381,11 @@ export function upsertEntry(next: EntryMeta) {
 
   if (isNew) {
     state.entries.unshift(next);
+    // Trim to ring-buffer cap: drop the oldest entries (tail) to keep the
+    // front-end array aligned with the Go backend's eviction limit.
+    if (state.entries.length > ENTRIES_CAP) {
+      state.entries.length = ENTRIES_CAP;
+    }
   } else {
     state.entries[idx] = next;
   }
@@ -397,10 +407,29 @@ export function upsertEntry(next: EntryMeta) {
   touch(...kinds);
 }
 
+// Front-end ring-buffer cap: aligned with the Go backend's ring buffer size
+// (500 entries). Prevents unbounded growth when the backend eviction and
+// front-end upserts are not perfectly in sync.
+const ENTRIES_CAP = 500;
+
 export function replaceEntries(items: EntryMeta[]) {
   const selectedBefore = state.selectedId;
   state.entries = [...items];
-  if (state.selectedId === null) state.selectedId = autoPickEntry(state.entries);
+  if (state.selectedId === null) {
+    state.selectedId = autoPickEntry(state.entries);
+  } else {
+    // The snapshot is authoritative: if the previously selected entry is no
+    // longer in the new list it has been evicted on the server. Fall back to
+    // auto-pick so the right pane doesn't keep showing a stale/gone entry.
+    const stillExists = state.entries.some((e) => e.id === state.selectedId);
+    if (!stillExists) {
+      state.selectedId = autoPickEntry(state.entries);
+      state.selectedEntry = null;
+      state.selection = { messageKey: null, toolUseId: null };
+      state.detailTab = "overview";
+      state.expandedMessages.clear();
+    }
+  }
   const kinds: VKind[] = ["struct", "meta"];
   if (state.selectedId !== selectedBefore) kinds.push("sel");
   touch(...kinds);

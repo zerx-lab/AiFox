@@ -11,7 +11,7 @@
 import { t } from "../i18n";
 import { h } from "./dom";
 import { fmtClock } from "./format";
-import { getState, setState, type EntryMeta } from "./state";
+import { type EntryMeta, getState, setState } from "./state";
 
 interface Problem {
   entryId: string;

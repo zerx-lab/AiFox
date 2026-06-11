@@ -6,7 +6,7 @@ import { getClient } from "../../api/client";
 import { setLanguage, supportedLanguages, t } from "../i18n";
 import { h } from "./dom";
 import { customSelect } from "./select";
-import { getState, setState, type HeaderKV, type Settings } from "./state";
+import { getState, type HeaderKV, type Settings, setState } from "./state";
 import { setTheme, type ThemeChoice } from "./theme";
 
 interface Draft {
@@ -55,9 +55,28 @@ const PRESET_OPTIONS: ReadonlyArray<[string, string]> = [
   ["custom", "settings.presetCustom"],
 ];
 
+// Module-level draft so user input is not discarded on unrelated re-renders
+// (e.g. an SSE entry event bumping the `ui` version). The draft is rebuilt
+// only when the server-side settings actually change (after a successful PUT
+// or on first render when no draft exists yet).
+let _draft: Draft | null = null;
+// The Settings revision that _draft was seeded from. Using object identity
+// rather than a counter — the state.settings reference is replaced on every
+// successful PUT or initial load, so identity change = server-authoritative
+// update and we rebuild the draft.
+let _draftSource: Settings | null = null;
+
 export function renderSettings(): HTMLElement {
-  const initial = getState().settings ?? emptySettings();
-  const draft = toDraft(initial);
+  const serverSettings = getState().settings ?? emptySettings();
+
+  // Rebuild draft only when server settings changed (new object reference)
+  // or no draft has been created yet. This preserves user edits across the
+  // region re-renders triggered by unrelated state slices.
+  if (_draft === null || _draftSource !== getState().settings) {
+    _draft = toDraft(serverSettings);
+    _draftSource = getState().settings;
+  }
+  const draft = _draft;
 
   const root = h("div.view-settings");
   const inner = h("div.settings");
@@ -176,10 +195,18 @@ export function renderSettings(): HTMLElement {
     style: { marginLeft: "12px", fontSize: "12px" },
   }) as HTMLElement;
 
+  let saving = false;
   const saveBtn = h(
     "button.btn",
     {
-      onclick: async () => {
+      onclick: async (e: Event) => {
+        if (saving) return;
+        saving = true;
+        const btn = e.currentTarget as HTMLButtonElement;
+        btn.disabled = true;
+        btn.textContent = t("settings.saving");
+        toast.textContent = "";
+
         const next: Settings = {
           upstreamBaseUrl: draft.upstreamBaseUrl.trim(),
           upstreamApiKey: draft.upstreamApiKey,
@@ -199,6 +226,9 @@ export function renderSettings(): HTMLElement {
             error: String((error as { detail?: string })?.detail ?? "unknown"),
           });
           toast.style.color = "var(--err)";
+          btn.disabled = false;
+          btn.textContent = t("settings.save");
+          saving = false;
           return;
         }
         setState({ settings: data });
@@ -210,6 +240,9 @@ export function renderSettings(): HTMLElement {
         if (info.data) setState({ proxy: info.data });
         toast.textContent = t("settings.saved");
         toast.style.color = "var(--ok)";
+        btn.disabled = false;
+        btn.textContent = t("settings.save");
+        saving = false;
       },
     },
     t("settings.save"),
