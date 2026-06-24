@@ -77,7 +77,7 @@ jobs:
 
       - name: Install Energy CLI + CEF framework
         run: |
-          go install github.com/energye/energy/cmd/energy@latest
+          go install github.com/energye/designer/cmd/energy@latest
           energy install
 
       - name: Install renderer deps
