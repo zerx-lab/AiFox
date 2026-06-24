@@ -49,6 +49,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Energy(CEF) links GTK3 + X11 via CGO; the ubuntu runner lacks these
+      # dev headers, so `task build` (go run . openapi) fails at pkg-config x11.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libx11-dev libxcb1-dev \
+            libxkbcommon-dev libnss3-dev libasound2-dev
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -75,10 +84,17 @@ jobs:
           path: ~/.energy
           key: energy-${{ runner.os }}-v2.5.6
 
+      # The energy CLI lives in the `cmd` sub-module of energye/energy and has no
+      # standalone tag, so `go install .../v2/cmd/energy@<ver>` cannot resolve it.
+      # Build it from the v2.5.6 source tree (matching go.mod) into GOBIN instead.
+      # This is the v2 CLI that reads config/energy_*.json (designer's CLI wants
+      # an incompatible .egp project file and is the wrong tool here).
       - name: Install Energy CLI + CEF framework
+        shell: bash
         run: |
-          go install github.com/energye/designer/cmd/energy@latest
-          energy install
+          git clone --depth 1 --branch v2.5.6 https://github.com/energye/energy.git "$RUNNER_TEMP/energy-src"
+          (cd "$RUNNER_TEMP/energy-src/cmd" && go install ./energy)
+          energy install --all
 
       - name: Install renderer deps
         run: pnpm install --frozen-lockfile
@@ -94,7 +110,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ai-fox-${{ matrix.label }}
-          path: release/**/*
+          path: build/**/*
           if-no-files-found: error
 
   release:
