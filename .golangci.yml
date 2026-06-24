@@ -1,0 +1,21 @@
+version: "2"
+
+# Minimal config: enable the linters that catch real bugs (nil deref, errcheck,
+# misuse) without the bikeshed-y style ones. Expand only with cause.
+linters:
+  default: none
+  enable:
+    - errcheck      # unchecked errors
+    - govet         # includes nilness analyzer
+    - ineffassign   # ineffective assignments
+    - staticcheck   # broad correctness checks (SA*, includes nil-related)
+    - unused        # dead code
+
+  settings:
+    govet:
+      enable:
+        - nilness   # nil pointer / interface checks
+
+formatters:
+  enable:
+    - gofmt

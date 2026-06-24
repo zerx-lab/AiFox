@@ -1,0 +1,144 @@
+version: "3"
+
+# Single source of orchestration. Non-obvious order:
+#   change Go API -> task openapi -> task codegen -> TS recompiles.
+# `task dev` and `task build` chain those for you.
+#
+# Runtime prereq (one-time, not a task): the CEF framework must be installed via
+#   go install github.com/energye/energy/cmd/energy@latest && energy install
+# which downloads the CEF binaries into ~/.energy. Without it the app won't run.
+
+vars:
+  GO_OUT: 'ai-fox{{exeExt}}'
+  # Hide the console on Windows; plain build elsewhere.
+  GO_LDFLAGS: '{{if eq OS "windows"}}-H windowsgui -s -w{{else}}-s -w{{end}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  # ---- Go ----
+
+  openapi:
+    desc: Dump the OpenAPI schema from Go to openapi.yaml
+    cmds:
+      - go run . openapi openapi.yaml
+    sources:
+      - "**/*.go"
+    generates:
+      - openapi.yaml
+
+  build:go:
+    desc: Build the CEF desktop binary (embeds resources/app)
+    cmds:
+      - go build -trimpath -ldflags="{{.GO_LDFLAGS}}" -o "{{.GO_OUT}}" .
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - resources/app/**/*
+    generates:
+      - "{{.GO_OUT}}"
+
+  test:go:
+    desc: Run Go tests
+    cmds:
+      - go test ./...
+
+  test:go:race:
+    desc: Run the race detector on the concurrency-critical packages (store/session/server)
+    cmds:
+      - go test -race ./internal/store ./internal/session ./internal/server
+
+  lint:go:
+    desc: Run golangci-lint (govet/nilness, staticcheck, errcheck, ineffassign, unused, gofmt)
+    cmds:
+      - golangci-lint run ./...
+
+  # ---- TS / renderer (web/) ----
+
+  install:
+    desc: Install pnpm dependencies for the renderer
+    dir: web
+    cmds:
+      - pnpm install
+    sources:
+      - web/package.json
+      - web/pnpm-lock.yaml
+
+  codegen:
+    desc: Regenerate web/src/api/schema.ts from openapi.yaml
+    deps: [openapi]
+    dir: web
+    cmds:
+      - pnpm codegen
+    sources:
+      - openapi.yaml
+    generates:
+      - web/src/api/schema.ts
+
+  build:web:
+    desc: Build the renderer bundle into resources/app
+    deps: [codegen]
+    dir: web
+    cmds:
+      - pnpm build
+    sources:
+      - web/src/**/*
+    generates:
+      - resources/app/index.html
+
+  typecheck:
+    desc: TS typecheck (no emit)
+    deps: [codegen]
+    dir: web
+    cmds:
+      - pnpm typecheck
+
+  test:ui:
+    desc: Vitest unit tests for pure-logic renderer modules
+    dir: web
+    cmds:
+      - pnpm test
+
+  lint:ts:
+    desc: Biome lint over web/src (schema.ts excluded)
+    dir: web
+    cmds:
+      - pnpm lint
+
+  lint:
+    desc: Run all linters (Go + TS)
+    deps: [lint:go, lint:ts]
+
+  verify:
+    desc: Acceptance gate before commit (typecheck + tests + race + lint)
+    deps: [typecheck, test:go, test:go:race, test:ui, lint]
+
+  # ---- Composite ----
+
+  build:
+    desc: Build the renderer bundle then the CEF binary
+    deps: [build:web]
+    cmds:
+      - task: build:go
+
+  dev:
+    desc: Build the renderer then run the CEF app (no hot reload — re-run after Go/TS changes)
+    deps: [build:web]
+    cmds:
+      - go run .
+
+  package:
+    desc: Produce a distributable via the Energy CLI (reads config/energy_*.json)
+    deps: [build]
+    cmds:
+      - energy package
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf "{{.GO_OUT}}" resources/app
+      - rm -f openapi.yaml web/src/api/schema.ts

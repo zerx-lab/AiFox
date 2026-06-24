@@ -1,0 +1,129 @@
+# Manual desktop build for the Energy(CEF) app.
+#
+# Trigger: `workflow_dispatch` only. Pick a version string in the GitHub UI
+# (e.g. v0.2.0) and the workflow will, per native runner:
+#   1. Install the Energy CLI + CEF framework (cached under ~/.energy).
+#   2. Build the renderer bundle + the Go/CEF binary (`task build`).
+#   3. Produce a distributable via `energy package` (reads config/energy_*.json).
+#   4. Upload each platform's `release/` tree as a workflow artifact.
+#   5. Attach all artifacts to a freshly-created draft GitHub Release.
+#
+# Notes:
+#   - The whole project lives at the repository root; every build step runs there.
+#   - The verify gate (`task verify`) is intentionally skipped here; this
+#     workflow assumes the requester validated locally.
+#   - Cross-compilation is not attempted; each OS builds on its native runner.
+#     macOS is out of scope for now (no signing).
+
+name: desktop-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag (e.g. v0.2.0). A draft release will be created with this tag.'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark the draft release as a prerelease.'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # required to create the draft GitHub Release.
+
+# Steps run at the repository root (the project is not nested under a subdir).
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: windows-2022
+            label: win32-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Cache the CEF framework downloaded by `energy install` (~hundreds of MB).
+      - name: Cache CEF framework
+        uses: actions/cache@v4
+        with:
+          path: ~/.energy
+          key: energy-${{ runner.os }}-v2.5.6
+
+      - name: Install Energy CLI + CEF framework
+        run: |
+          go install github.com/energye/energy/cmd/energy@latest
+          energy install
+
+      - name: Install renderer deps
+        run: pnpm install --frozen-lockfile
+        working-directory: web
+
+      - name: Build
+        run: task build
+
+      - name: Package
+        run: energy package
+
+      - name: Upload distributable
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-fox-${{ matrix.label }}
+          path: release/**/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        id: collect
+        working-directory: .
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \
+            \( -iname '*.exe' -o -iname '*.dmg' -o -iname '*.deb' \
+               -o -iname '*.rpm' -o -iname '*.zip' -o -iname '*.tar.gz' \) \
+            -exec cp -v {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          draft: true
+          prerelease: ${{ inputs.prerelease }}
+          files: release-assets/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

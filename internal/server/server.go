@@ -1,0 +1,274 @@
+// Package server builds the HTTP server that hosts the Huma API.
+//
+// Security model:
+//   - The server binds to 127.0.0.1 on an OS-assigned port. It is never
+//     reachable from another host.
+//   - A random handshake token is generated on startup and required on every
+//     request via the X-Ai-fox-Token header. The Go process forwards the
+//     token to the renderer over the Energy(CEF) IPC handshake.
+package server
+
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"net"
+	"net/http"
+	"strconv"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
+
+	"context"
+
+	"github.com/zerx-lab/ai-fox/internal/api"
+	"github.com/zerx-lab/ai-fox/internal/config"
+	"github.com/zerx-lab/ai-fox/internal/proxy"
+	"github.com/zerx-lab/ai-fox/internal/session"
+	"github.com/zerx-lab/ai-fox/internal/store"
+)
+
+const (
+	// AuthHeader is the request header that must carry the handshake token.
+	AuthHeader = "X-Ai-fox-Token"
+
+	// LoopbackHost is the only address we ever bind to.
+	LoopbackHost = "127.0.0.1"
+)
+
+// Config controls how the HTTP server is constructed. All fields are optional;
+// zero values produce a production-safe default.
+type Config struct {
+	// Port to bind. 0 means "let the OS pick a free port".
+	Port int
+	// Token to require. Empty means "generate a fresh random token".
+	Token string
+	// Settings, when set, is reused instead of opened from disk. Tests/dump
+	// paths pass a throwaway store; production callers pass nil and let
+	// Build() open the default location.
+	Settings *config.Store
+	// Traffic is the in-memory ring buffer of captured requests. Optional;
+	// Build() will create a default-sized one if nil.
+	Traffic *store.Store
+	// Proxy lets the API surface read/control the reverse proxy. Optional;
+	// when nil the proxy info endpoint reports stopped + empty address and
+	// PUT /v1/proxy returns 500.
+	Proxy api.ProxyController
+	// Sessions, when set, exposes session-aggregation rollups via the
+	// /v1/sessions endpoints and broadcasts session updates over SSE.
+	Sessions *session.Aggregator
+}
+
+// Built is the result of Build. It exposes everything the caller needs to
+// start serving, print the handshake to stdout, or dump the OpenAPI schema.
+type Built struct {
+	Listener net.Listener
+	// Handler is the mux wrapped with CORS. Use this when calling http.Serve.
+	Handler  http.Handler
+	Mux      *http.ServeMux
+	API      huma.API
+	Token    string
+	Settings *config.Store
+	Traffic  *store.Store
+}
+
+// Build constructs the listener, mux, Huma API, and auth middleware without
+// starting Serve. Callers decide when (and whether) to block.
+func Build(cfg Config) (*Built, error) {
+	token := cfg.Token
+	if token == "" {
+		var err error
+		token, err = randomToken(32)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	settings := cfg.Settings
+	if settings == nil {
+		var err error
+		settings, err = config.Open(config.DefaultPath())
+		if err != nil {
+			return nil, err
+		}
+	}
+	traffic := cfg.Traffic
+	if traffic == nil {
+		traffic = store.New(500)
+	}
+
+	addr := net.JoinHostPort(LoopbackHost, strconv.Itoa(cfg.Port))
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	mux := http.NewServeMux()
+	humaCfg := huma.DefaultConfig("Ai-fox API", "0.3.0")
+	humaCfg.Info.Description = "HTTP API exposed by the Go backend to the renderer."
+	humaAPI := humago.New(mux, humaCfg)
+
+	// Auth middleware: reject any request missing the handshake token.
+	humaAPI.UseMiddleware(authMiddleware(token))
+
+	var replayer api.Replayer
+	var breakpoints api.BreakpointController
+	if pc, ok := cfg.Proxy.(*proxy.Controller); ok && pc != nil {
+		replayer = replayAdapter{c: pc}
+		breakpoints = breakpointAdapter{r: pc.Breakpoints()}
+	}
+
+	api.Register(humaAPI, api.Deps{
+		Config:      settings,
+		Traffic:     traffic,
+		Proxy:       cfg.Proxy,
+		Replay:      replayer,
+		Breakpoints: breakpoints,
+		Sessions:    cfg.Sessions,
+	})
+
+	return &Built{
+		Listener: ln,
+		Handler:  corsMiddleware(mux),
+		Mux:      mux,
+		API:      humaAPI,
+		Token:    token,
+		Settings: settings,
+		Traffic:  traffic,
+	}, nil
+}
+
+// corsMiddleware allows the renderer (loaded from http://127.0.0.1:22022 via the
+// embedded asset server in packaged mode, or http://localhost:5173 in dev) to
+// call the loopback backend. The
+// server only binds to 127.0.0.1, so reflecting the origin does not widen the
+// attack surface — anything that can reach the port could already speak HTTP
+// to it directly. Preflight (OPTIONS) requests are short-circuited here so
+// they never hit the auth middleware, which rightfully has no token to check.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		h := w.Header()
+		h.Set("Access-Control-Allow-Origin", origin)
+		h.Set("Vary", "Origin")
+		h.Set("Access-Control-Allow-Headers", "Content-Type, "+AuthHeader)
+		h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		h.Set("Access-Control-Max-Age", "600")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func authMiddleware(token string) func(huma.Context, func(huma.Context)) {
+	expected := []byte(token)
+	return func(ctx huma.Context, next func(huma.Context)) {
+		// Constant-time compare so a malicious local process can't time the
+		// handshake-token check byte by byte. The loopback bind already limits
+		// reach, but the token is the only authn we have, so don't leak it.
+		if subtle.ConstantTimeCompare([]byte(ctx.Header(AuthHeader)), expected) != 1 {
+			ctx.SetStatus(http.StatusUnauthorized)
+			return
+		}
+		next(ctx)
+	}
+}
+
+// replayAdapter bridges the api.Replayer interface (defined in package api
+// to avoid an import cycle) and the concrete proxy.Controller. Field-by-field
+// translation between api.ReplayOverrides and proxy.ReplayOverrides.
+type replayAdapter struct{ c *proxy.Controller }
+
+func (a replayAdapter) Replay(ctx context.Context, originalID string, o api.ReplayOverrides) (string, error) {
+	return a.c.Replay(ctx, originalID, proxy.ReplayOverrides{
+		Model:       o.Model,
+		Temperature: o.Temperature,
+		TopP:        o.TopP,
+		TopK:        o.TopK,
+		MaxTokens:   o.MaxTokens,
+		Stream:      o.Stream,
+	})
+}
+
+// breakpointAdapter bridges api.BreakpointController and proxy.Registry.
+// Same pattern as replayAdapter: api owns the interface, server bridges to
+// the concrete proxy.Registry.
+type breakpointAdapter struct{ r *proxy.Registry }
+
+func (a breakpointAdapter) List() []api.Breakpoint {
+	in := a.r.List()
+	out := make([]api.Breakpoint, len(in))
+	for i, bp := range in {
+		out[i] = api.Breakpoint{
+			ID:      bp.ID,
+			Match:   string(bp.Match),
+			Pattern: bp.Pattern,
+			Enabled: bp.Enabled,
+		}
+	}
+	return out
+}
+
+func (a breakpointAdapter) Add(in api.Breakpoint) (api.Breakpoint, error) {
+	created, err := a.r.Add(proxy.Breakpoint{
+		Match:   proxy.MatchKind(in.Match),
+		Pattern: in.Pattern,
+		Enabled: in.Enabled,
+	})
+	if err != nil {
+		return api.Breakpoint{}, err
+	}
+	return api.Breakpoint{
+		ID:      created.ID,
+		Match:   string(created.Match),
+		Pattern: created.Pattern,
+		Enabled: created.Enabled,
+	}, nil
+}
+
+func (a breakpointAdapter) Update(id string, enabled bool) error {
+	return a.r.Update(id, enabled)
+}
+
+func (a breakpointAdapter) Delete(id string) {
+	a.r.Delete(id)
+}
+
+func (a breakpointAdapter) Clear() {
+	a.r.Clear()
+}
+
+func (a breakpointAdapter) PausedSnapshot() []api.Paused {
+	in := a.r.PausedSnapshot()
+	out := make([]api.Paused, len(in))
+	for i, p := range in {
+		out[i] = api.Paused{
+			EntryID:      p.EntryID,
+			BreakpointID: p.BreakpointID,
+			Method:       p.Method,
+			URL:          p.URL,
+			PausedAt:     p.PausedAt,
+		}
+	}
+	return out
+}
+
+func (a breakpointAdapter) Continue(entryID string) error { return a.r.Continue(entryID) }
+func (a breakpointAdapter) Abort(entryID string) error    { return a.r.Abort(entryID) }
+func (a breakpointAdapter) Subscribe() (<-chan struct{}, func()) {
+	return a.r.Subscribe()
+}
+
+func randomToken(nBytes int) (string, error) {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}

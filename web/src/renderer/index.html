@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:*" />
+    <title>ai-fox</title>
+    <script src="./theme-boot.js"></script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot">
+        <div class="boot-mark"></div>
+        <div class="boot-text">loading…</div>
+      </div>
+    </div>
+    <script type="module" src="./renderer.ts"></script>
+  </body>
+</html>

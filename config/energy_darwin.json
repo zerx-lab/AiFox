@@ -1,0 +1,28 @@
+{
+  "name": "ai-fox",
+  "projectPath": "@",
+  "frameworkPath": "",
+  "assetsDir": "assets",
+  "outputFilename": "ai-fox",
+  "helperFilePath": "",
+  "plist": {
+    "icon": "@/resources/icon.png",
+    "bundleName": "ai-fox",
+    "bundleDisplayName": "ai-fox",
+    "bundleIdentifier": "com.aifox.aifox",
+    "locals": [
+      "zh_CN",
+      "en"
+    ],
+    "bundleVersion": "1.0.0",
+    "bundleShortVersionString": "1.0.0",
+    "copyright": "Copyright.....",
+    "comments": "Built using ENERGY (https://github.com/energye/energy)",
+    "include": [],
+    "exclude": ["cache"]
+  },
+  "author": {
+    "name": "yanghy",
+    "email": "snxamdf@126.com"
+  }
+}

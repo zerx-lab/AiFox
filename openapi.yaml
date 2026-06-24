@@ -1,0 +1,1865 @@
+components:
+  schemas:
+    Analysis:
+      additionalProperties: false
+      properties:
+        anthropic:
+          $ref: "#/components/schemas/AnthropicAnalysis"
+        endpoint:
+          description: Human-readable endpoint label
+          type: string
+        error:
+          $ref: "#/components/schemas/NormalizedError"
+        kind:
+          description: Analyzer that produced this view
+          type: string
+        normalized:
+          $ref: "#/components/schemas/NormalizedRequest"
+        openai:
+          $ref: "#/components/schemas/OpenAIAnalysis"
+        responses:
+          $ref: "#/components/schemas/ResponsesAnalysis"
+        stopReason:
+          type: string
+        usage:
+          $ref: "#/components/schemas/NormalizedUsage"
+        warnings:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - kind
+        - endpoint
+      type: object
+    AnthropicAnalysis:
+      additionalProperties: false
+      properties:
+        request:
+          $ref: "#/components/schemas/AnthropicRequest"
+        response:
+          $ref: "#/components/schemas/AnthropicResponse"
+      type: object
+    AnthropicBlock:
+      additionalProperties: false
+      properties:
+        cache:
+          $ref: "#/components/schemas/AnthropicCacheControl"
+        cacheControl: {}
+        content: {}
+        id:
+          type: string
+        image:
+          $ref: "#/components/schemas/AnthropicImage"
+        input: {}
+        isError:
+          type: boolean
+        name:
+          type: string
+        raw: {}
+        text:
+          type: string
+        toolUseId:
+          type: string
+        type:
+          type: string
+      required:
+        - type
+      type: object
+    AnthropicCacheControl:
+      additionalProperties: false
+      properties:
+        ttl:
+          type: string
+        type:
+          type: string
+      type: object
+    AnthropicError:
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+        type:
+          type: string
+      type: object
+    AnthropicImage:
+      additionalProperties: false
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        mediaType:
+          type: string
+        sourceType:
+          type: string
+        url:
+          type: string
+      type: object
+    AnthropicMessage:
+      additionalProperties: false
+      properties:
+        content:
+          items:
+            $ref: "#/components/schemas/AnthropicBlock"
+          type:
+            - array
+            - "null"
+        role:
+          type: string
+      required:
+        - role
+        - content
+      type: object
+    AnthropicRequest:
+      additionalProperties: false
+      properties:
+        betas:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        maxTokens:
+          format: int64
+          type: integer
+        messages:
+          items:
+            $ref: "#/components/schemas/AnthropicMessage"
+          type:
+            - array
+            - "null"
+        metadata: {}
+        model:
+          type: string
+        serviceTier:
+          type: string
+        stopSequences:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        stream:
+          type: boolean
+        system:
+          items:
+            $ref: "#/components/schemas/AnthropicBlock"
+          type:
+            - array
+            - "null"
+        temperature:
+          format: double
+          type: number
+        thinking:
+          $ref: "#/components/schemas/AnthropicThinking"
+        toolChoice: {}
+        tools:
+          items:
+            $ref: "#/components/schemas/AnthropicTool"
+          type:
+            - array
+            - "null"
+        topK:
+          format: int64
+          type: integer
+        topP:
+          format: double
+          type: number
+        unknownFields:
+          additionalProperties: {}
+          type: object
+      type: object
+    AnthropicResponse:
+      additionalProperties: false
+      properties:
+        content:
+          items:
+            $ref: "#/components/schemas/AnthropicBlock"
+          type:
+            - array
+            - "null"
+        error:
+          $ref: "#/components/schemas/AnthropicError"
+        id:
+          type: string
+        model:
+          type: string
+        role:
+          type: string
+        stopReason:
+          type: string
+        streamed:
+          type: boolean
+        usage:
+          $ref: "#/components/schemas/AnthropicUsage"
+      type: object
+    AnthropicThinking:
+      additionalProperties: false
+      properties:
+        budgetTokens:
+          format: int64
+          type: integer
+        type:
+          type: string
+      type: object
+    AnthropicTool:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        inputSchema: {}
+        name:
+          type: string
+        raw: {}
+      required:
+        - name
+      type: object
+    AnthropicUsage:
+      additionalProperties: false
+      properties:
+        cacheCreationInputTokens:
+          format: int64
+          type: integer
+        cacheReadInputTokens:
+          format: int64
+          type: integer
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+      type: object
+    Breakpoint:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Breakpoint.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          type: boolean
+        id:
+          type: string
+        match:
+          description: How the pattern is matched.
+          enum:
+            - endpoint
+            - path
+          type: string
+        pattern:
+          description: Match pattern, e.g. "POST /v1/messages" or "/v1/messages".
+          type: string
+      required:
+        - id
+        - match
+        - pattern
+        - enabled
+      type: object
+    CreateBreakpointInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CreateBreakpointInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          type: boolean
+        match:
+          enum:
+            - endpoint
+            - path
+          type: string
+        pattern:
+          minLength: 1
+          type: string
+      required:
+        - match
+        - pattern
+        - enabled
+      type: object
+    EntryMeta:
+      additionalProperties: false
+      properties:
+        cacheCreate:
+          format: int64
+          type: integer
+        cacheRead:
+          format: int64
+          type: integer
+        cost:
+          format: double
+          type: number
+        durationMillis:
+          format: int64
+          type: integer
+        endedAt:
+          format: date-time
+          type: string
+        endpoint:
+          description: Human-readable endpoint label for grouping.
+          type: string
+        error:
+          type: string
+        hasResponseError:
+          type: boolean
+        hasStructured:
+          description: True when a structured Anthropic analysis is available.
+          type: boolean
+        id:
+          type: string
+        inputTokens:
+          format: int64
+          type: integer
+        isUtility:
+          description: Sub-task call (title-gen/tool summary); excluded from turn counts.
+          type: boolean
+        method:
+          type: string
+        model:
+          description: Model from the request/response analysis.
+          type: string
+        outputTokens:
+          format: int64
+          type: integer
+        replayedFromId:
+          type: string
+        requestSize:
+          format: int64
+          type: integer
+        responseSize:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        statusCode:
+          format: int64
+          type: integer
+        streaming:
+          type: boolean
+        truncated:
+          type: boolean
+        upstreamUrl:
+          type: string
+        url:
+          type: string
+        warningCount:
+          format: int64
+          type: integer
+      required:
+        - id
+        - startedAt
+        - endedAt
+        - durationMillis
+        - method
+        - url
+        - upstreamUrl
+        - statusCode
+        - requestSize
+        - responseSize
+        - streaming
+        - truncated
+        - hasStructured
+        - isUtility
+        - hasResponseError
+        - warningCount
+        - inputTokens
+        - outputTokens
+        - cacheRead
+        - cacheCreate
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      properties:
+        location:
+          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
+          type: string
+        message:
+          description: Error message text
+          type: string
+        value:
+          description: The value at the given location
+      type: object
+    ErrorModel:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ErrorModel.json
+          format: uri
+          readOnly: true
+          type: string
+        detail:
+          description: A human-readable explanation specific to this occurrence of the problem.
+          examples:
+            - Property foo is required but is missing.
+          type: string
+        errors:
+          description: Optional list of individual error details
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          type:
+            - array
+            - "null"
+        instance:
+          description: A URI reference that identifies the specific occurrence of the problem.
+          examples:
+            - https://example.com/error-log/abc123
+          format: uri
+          type: string
+        status:
+          description: HTTP status code
+          examples:
+            - 400
+          format: int64
+          type: integer
+        title:
+          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+          examples:
+            - Bad Request
+          type: string
+        type:
+          default: about:blank
+          description: A URI reference to human-readable documentation for the error.
+          examples:
+            - https://example.com/errors/example
+          format: uri
+          type: string
+      type: object
+    HeaderKVBody:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+      required:
+        - name
+        - value
+      type: object
+    HealthOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/HealthOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        status:
+          description: Always 'ok' when the server is healthy.
+          examples:
+            - ok
+          type: string
+        time:
+          description: Server time in RFC3339.
+          format: date-time
+          type: string
+      required:
+        - status
+        - time
+      type: object
+    LayoutBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/LayoutBody.json
+          format: uri
+          readOnly: true
+          type: string
+        bottomHeight:
+          description: Bottom pane height in px (0 = default)
+          format: int64
+          type: integer
+        colLeft:
+          description: Sidebar width in px (0 = default)
+          format: int64
+          type: integer
+        colRight:
+          description: Detail panel width in px (0 = default)
+          format: int64
+          type: integer
+      required:
+        - colLeft
+        - colRight
+        - bottomHeight
+      type: object
+    ListBreakpointsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListBreakpointsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/Breakpoint"
+          type:
+            - array
+            - "null"
+        paused:
+          items:
+            $ref: "#/components/schemas/Paused"
+          type:
+            - array
+            - "null"
+      required:
+        - items
+        - paused
+      type: object
+    ListSessionsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListSessionsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/SessionSummaryBody"
+          type:
+            - array
+            - "null"
+      required:
+        - items
+      type: object
+    ListTrafficOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListTrafficOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/EntryMeta"
+          type:
+            - array
+            - "null"
+      required:
+        - items
+      type: object
+    NormalizedError:
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        type:
+          type: string
+      type: object
+    NormalizedMessage:
+      additionalProperties: false
+      properties:
+        fingerprint:
+          type: string
+        role:
+          type: string
+      required:
+        - role
+        - fingerprint
+      type: object
+    NormalizedRequest:
+      additionalProperties: false
+      properties:
+        messages:
+          items:
+            $ref: "#/components/schemas/NormalizedMessage"
+          type:
+            - array
+            - "null"
+        model:
+          type: string
+        provider:
+          type: string
+        stream:
+          type: boolean
+        system:
+          type: string
+      required:
+        - provider
+      type: object
+    NormalizedUsage:
+      additionalProperties: false
+      properties:
+        cacheReadTokens:
+          format: int64
+          type: integer
+        cacheWriteTokens:
+          format: int64
+          type: integer
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+      type: object
+    OpenAIAnalysis:
+      additionalProperties: false
+      properties:
+        request:
+          $ref: "#/components/schemas/OpenAIRequest"
+        response:
+          $ref: "#/components/schemas/OpenAIResponse"
+      type: object
+    OpenAIChoice:
+      additionalProperties: false
+      properties:
+        finishReason:
+          type: string
+        index:
+          format: int64
+          type: integer
+        message:
+          $ref: "#/components/schemas/OpenAIMessage"
+        text:
+          type: string
+      required:
+        - index
+      type: object
+    OpenAIError:
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        type:
+          type: string
+      type: object
+    OpenAIFunctionCall:
+      additionalProperties: false
+      properties:
+        arguments:
+          type: string
+        name:
+          type: string
+      type: object
+    OpenAIMessage:
+      additionalProperties: false
+      properties:
+        content:
+          type: string
+        functionCall:
+          $ref: "#/components/schemas/OpenAIFunctionCall"
+        name:
+          type: string
+        role:
+          type: string
+        toolCallId:
+          type: string
+        toolCalls:
+          items:
+            $ref: "#/components/schemas/OpenAIToolCall"
+          type:
+            - array
+            - "null"
+      type: object
+    OpenAIRequest:
+      additionalProperties: false
+      properties:
+        includeUsage:
+          type: boolean
+        maxTokens:
+          format: int64
+          type: integer
+        messages:
+          items:
+            $ref: "#/components/schemas/OpenAIMessage"
+          type:
+            - array
+            - "null"
+        model:
+          type: string
+        prompt:
+          type: string
+        stream:
+          type: boolean
+        temperature:
+          format: double
+          type: number
+        tools:
+          items:
+            $ref: "#/components/schemas/OpenAITool"
+          type:
+            - array
+            - "null"
+        topP:
+          format: double
+          type: number
+        unknownFields:
+          additionalProperties: {}
+          type: object
+      type: object
+    OpenAIResponse:
+      additionalProperties: false
+      properties:
+        choices:
+          items:
+            $ref: "#/components/schemas/OpenAIChoice"
+          type:
+            - array
+            - "null"
+        error:
+          $ref: "#/components/schemas/OpenAIError"
+        id:
+          type: string
+        model:
+          type: string
+        streamed:
+          type: boolean
+        usage:
+          $ref: "#/components/schemas/OpenAIUsage"
+      type: object
+    OpenAITool:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        name:
+          type: string
+        parameters: {}
+        type:
+          type: string
+      type: object
+    OpenAIToolCall:
+      additionalProperties: false
+      properties:
+        arguments:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+      type: object
+    OpenAIUsage:
+      additionalProperties: false
+      properties:
+        cachedTokens:
+          format: int64
+          type: integer
+        completionTokens:
+          format: int64
+          type: integer
+        promptTokens:
+          format: int64
+          type: integer
+        totalTokens:
+          format: int64
+          type: integer
+      type: object
+    Paused:
+      additionalProperties: false
+      properties:
+        breakpointId:
+          type: string
+        entryId:
+          type: string
+        method:
+          type: string
+        pausedAt:
+          format: date-time
+          type: string
+        url:
+          type: string
+      required:
+        - entryId
+        - breakpointId
+        - method
+        - url
+        - pausedAt
+      type: object
+    ProxyInfoOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ProxyInfoOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        address:
+          description: Loopback host:port the proxy listens on (stable across enable/disable)
+          type: string
+        baseUrl:
+          description: Full http://host:port URL clients should point at
+          type: string
+        configured:
+          description: True when upstreamBaseUrl is set
+          type: boolean
+        enabled:
+          description: True when the listener is accepting connections
+          type: boolean
+        port:
+          description: Fixed loopback port the proxy is configured to use
+          format: int64
+          type: integer
+      required:
+        - address
+        - baseUrl
+        - port
+        - configured
+        - enabled
+      type: object
+    Rename-sessionRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Rename-sessionRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        name:
+          description: Display label; empty string clears the label.
+          maxLength: 128
+          type: string
+      required:
+        - name
+      type: object
+    ReplayInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ReplayInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        overrides:
+          $ref: "#/components/schemas/ReplayOverridesBody"
+      required:
+        - overrides
+      type: object
+    ReplayOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ReplayOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        entryId:
+          description: ID of the newly captured entry.
+          type: string
+      required:
+        - entryId
+      type: object
+    ReplayOverridesBody:
+      additionalProperties: false
+      properties:
+        maxTokens:
+          description: Override max output tokens.
+          format: int64
+          type: integer
+        model:
+          description: Override the upstream model identifier.
+          type: string
+        stream:
+          description: Force streaming on / off.
+          type: boolean
+        temperature:
+          description: Override sampling temperature.
+          format: double
+          type: number
+        topK:
+          description: Override top-k sampling.
+          format: int64
+          type: integer
+        topP:
+          description: Override nucleus sampling threshold.
+          format: double
+          type: number
+      type: object
+    ResponsesAnalysis:
+      additionalProperties: false
+      properties:
+        request:
+          $ref: "#/components/schemas/ResponsesRequest"
+        response:
+          $ref: "#/components/schemas/ResponsesResponse"
+      type: object
+    ResponsesImage:
+      additionalProperties: false
+      properties:
+        detail:
+          type: string
+        url:
+          type: string
+      type: object
+    ResponsesIncomplete:
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+      type: object
+    ResponsesItem:
+      additionalProperties: false
+      properties:
+        arguments:
+          type: string
+        callId:
+          type: string
+        content:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        output:
+          type: string
+        parts:
+          items:
+            $ref: "#/components/schemas/ResponsesPart"
+          type:
+            - array
+            - "null"
+        raw: {}
+        role:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        type:
+          type: string
+      type: object
+    ResponsesPart:
+      additionalProperties: false
+      properties:
+        image:
+          $ref: "#/components/schemas/ResponsesImage"
+        raw: {}
+        text:
+          type: string
+        type:
+          type: string
+      type: object
+    ResponsesReasoningConfig:
+      additionalProperties: false
+      properties:
+        effort:
+          type: string
+        summary:
+          type: string
+      type: object
+    ResponsesRequest:
+      additionalProperties: false
+      properties:
+        input:
+          items:
+            $ref: "#/components/schemas/ResponsesItem"
+          type:
+            - array
+            - "null"
+        instructions:
+          type: string
+        maxOutputTokens:
+          format: int64
+          type: integer
+        model:
+          type: string
+        previousResponseId:
+          type: string
+        reasoning:
+          $ref: "#/components/schemas/ResponsesReasoningConfig"
+        store:
+          type: boolean
+        stream:
+          type: boolean
+        temperature:
+          format: double
+          type: number
+        text: {}
+        tools:
+          items:
+            $ref: "#/components/schemas/ResponsesTool"
+          type:
+            - array
+            - "null"
+        unknownFields:
+          additionalProperties: {}
+          type: object
+      type: object
+    ResponsesResponse:
+      additionalProperties: false
+      properties:
+        error:
+          $ref: "#/components/schemas/OpenAIError"
+        id:
+          type: string
+        incomplete:
+          $ref: "#/components/schemas/ResponsesIncomplete"
+        model:
+          type: string
+        output:
+          items:
+            $ref: "#/components/schemas/ResponsesItem"
+          type:
+            - array
+            - "null"
+        status:
+          type: string
+        streamed:
+          type: boolean
+        usage:
+          $ref: "#/components/schemas/ResponsesUsage"
+      type: object
+    ResponsesTool:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        name:
+          type: string
+        parameters: {}
+        raw: {}
+        type:
+          type: string
+      type: object
+    ResponsesUsage:
+      additionalProperties: false
+      properties:
+        cachedTokens:
+          format: int64
+          type: integer
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+        reasoningTokens:
+          format: int64
+          type: integer
+        totalTokens:
+          format: int64
+          type: integer
+      type: object
+    SessionSummaryBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/SessionSummaryBody.json
+          format: uri
+          readOnly: true
+          type: string
+        cacheCreate:
+          format: int64
+          type: integer
+        cacheRead:
+          format: int64
+          type: integer
+        cost:
+          description: Estimated USD cost across the session, from the built-in pricing table.
+          format: double
+          type: number
+        entryIds:
+          description: Captured traffic entries belonging to this session, oldest first.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        fingerprint:
+          description: Hash of the conversation anchor.
+          type: string
+        hasError:
+          type: boolean
+        hasStreaming:
+          type: boolean
+        hasUnfinished:
+          type: boolean
+        id:
+          description: Opaque session ID.
+          type: string
+        inputTokens:
+          format: int64
+          type: integer
+        lastAt:
+          format: date-time
+          type: string
+        model:
+          description: Primary (most recent non-utility) model.
+          type: string
+        models:
+          description: Every distinct model used, primary first.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        name:
+          description: User-supplied label. Empty when the user has not renamed this session.
+          type: string
+        outputTokens:
+          format: int64
+          type: integer
+        provider:
+          description: anthropic | openai | gemini
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        status:
+          enum:
+            - active
+            - completed
+            - failed
+          type: string
+        turnCount:
+          format: int64
+          type: integer
+      required:
+        - id
+        - fingerprint
+        - provider
+        - entryIds
+        - startedAt
+        - lastAt
+        - turnCount
+        - inputTokens
+        - outputTokens
+        - cacheRead
+        - cacheCreate
+        - cost
+        - status
+        - hasError
+        - hasStreaming
+        - hasUnfinished
+      type: object
+    SetProxyEnabledInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/SetProxyEnabledInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          description: Desired state of the proxy listener
+          type: boolean
+      required:
+        - enabled
+      type: object
+    SettingsBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/SettingsBody.json
+          format: uri
+          readOnly: true
+          type: string
+        authPreset:
+          description: Picks the header shape used to authenticate upstream
+          enum:
+            - anthropic
+            - openai
+            - openai-responses
+            - custom
+          type: string
+        customHeaders:
+          description: User-defined headers injected on every forwarded request (only when authPreset=custom)
+          items:
+            $ref: "#/components/schemas/HeaderKVBody"
+          type:
+            - array
+            - "null"
+        language:
+          description: UI language code; empty means follow OS
+          enum:
+            - ""
+            - en
+            - zh-CN
+          type: string
+        layout:
+          $ref: "#/components/schemas/LayoutBody"
+          description: Persisted panel geometry (px). Zero on a field means use the stylesheet default.
+        proxyEnabled:
+          description: Whether the proxy listener should be running
+          type: boolean
+        proxyPort:
+          description: Fixed loopback port the proxy binds to
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
+        theme:
+          description: UI color scheme; empty means follow OS
+          enum:
+            - ""
+            - dark
+            - light
+          type: string
+        upstreamApiKey:
+          description: API key forwarded to upstream (ignored when authPreset=custom)
+          type: string
+        upstreamBaseUrl:
+          description: Upstream AI provider base URL, e.g. https://api.anthropic.com
+          type: string
+      required:
+        - upstreamBaseUrl
+        - upstreamApiKey
+        - authPreset
+        - customHeaders
+        - proxyEnabled
+        - proxyPort
+        - language
+        - theme
+        - layout
+      type: object
+    TrafficEntry:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/TrafficEntry.json
+          format: uri
+          readOnly: true
+          type: string
+        analysis:
+          $ref: "#/components/schemas/Analysis"
+        durationMillis:
+          format: int64
+          type: integer
+        endedAt:
+          format: date-time
+          type: string
+        error:
+          type: string
+        id:
+          type: string
+        method:
+          type: string
+        replayedFromId:
+          type: string
+        requestBody:
+          type: string
+        requestHeaders:
+          additionalProperties:
+            type: string
+          type: object
+        requestSize:
+          format: int64
+          type: integer
+        responseBody:
+          type: string
+        responseHeaders:
+          additionalProperties:
+            type: string
+          type: object
+        responseSize:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        statusCode:
+          format: int64
+          type: integer
+        streaming:
+          type: boolean
+        truncated:
+          type: boolean
+        upstreamUrl:
+          type: string
+        url:
+          type: string
+      required:
+        - id
+        - startedAt
+        - endedAt
+        - durationMillis
+        - method
+        - url
+        - upstreamUrl
+        - statusCode
+        - requestHeaders
+        - requestBody
+        - requestSize
+        - responseHeaders
+        - responseBody
+        - responseSize
+        - streaming
+        - truncated
+      type: object
+    TrafficTailOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/TrafficTailOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        appendBytes:
+          description: Response bytes after the requested offset.
+          type: string
+        done:
+          description: True once the entry has finalized; stop polling.
+          type: boolean
+        responseSize:
+          description: Total response bytes captured so far.
+          format: int64
+          type: integer
+        statusCode:
+          format: int64
+          type: integer
+        truncated:
+          type: boolean
+      required:
+        - appendBytes
+        - responseSize
+        - truncated
+        - done
+        - statusCode
+      type: object
+    UpdateBreakpointInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UpdateBreakpointInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          type: boolean
+      required:
+        - enabled
+      type: object
+info:
+  description: HTTP API exposed by the Go backend to the renderer.
+  title: Ai-fox API
+  version: 0.3.0
+openapi: 3.1.0
+paths:
+  /health:
+    get:
+      description: Returns ok when the Go backend is reachable.
+      operationId: get-health
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Health probe
+      tags:
+        - system
+  /v1/breakpoints:
+    get:
+      operationId: list-breakpoints
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListBreakpointsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List configured breakpoints and currently-paused requests.
+      tags:
+        - breakpoints
+    post:
+      operationId: create-breakpoint
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBreakpointInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Breakpoint"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Add a breakpoint.
+      tags:
+        - breakpoints
+  /v1/breakpoints/paused/{entryId}/abort:
+    post:
+      operationId: abort-paused
+      parameters:
+        - in: path
+          name: entryId
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Drop a paused request — client receives 503.
+      tags:
+        - breakpoints
+  /v1/breakpoints/paused/{entryId}/continue:
+    post:
+      operationId: continue-paused
+      parameters:
+        - in: path
+          name: entryId
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Resume a paused request — forward it upstream.
+      tags:
+        - breakpoints
+  /v1/breakpoints/{id}:
+    delete:
+      operationId: delete-breakpoint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Delete a breakpoint (and continue any held request).
+      tags:
+        - breakpoints
+    put:
+      operationId: update-breakpoint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBreakpointInputBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Enable / disable a breakpoint.
+      tags:
+        - breakpoints
+  /v1/proxy:
+    get:
+      operationId: get-proxy-info
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyInfoOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Proxy address and configuration status
+      tags:
+        - proxy
+    put:
+      operationId: set-proxy-enabled
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetProxyEnabledInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyInfoOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Start or stop the proxy listener
+      tags:
+        - proxy
+  /v1/sessions:
+    get:
+      operationId: list-sessions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSessionsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List aggregated sessions, newest first.
+      tags:
+        - sessions
+  /v1/sessions/{id}:
+    get:
+      operationId: get-session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionSummaryBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Fetch one session by id.
+      tags:
+        - sessions
+    patch:
+      operationId: rename-session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Rename-sessionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionSummaryBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Rename a session. An empty name clears the label.
+      tags:
+        - sessions
+  /v1/settings:
+    get:
+      operationId: get-settings
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Read persisted user settings
+      tags:
+        - settings
+    put:
+      operationId: put-settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Replace persisted user settings
+      tags:
+        - settings
+  /v1/settings/layout:
+    put:
+      description: Updates the colLeft / colRight / bottomHeight fields in isolation (read-modify-write), so a resize-drag save never clobbers an in-progress edit of the rest of the settings.
+      operationId: put-settings-layout
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LayoutBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Persist only the panel layout geometry
+      tags:
+        - settings
+  /v1/traffic:
+    delete:
+      description: Wipes the in-memory ring buffer, the on-disk JSONL log, the session aggregator's persisted name map, and the active breakpoint set. Held requests are released as continue.
+      operationId: clear-traffic
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Discard every captured entry, session label, and breakpoint.
+      tags:
+        - traffic
+    get:
+      operationId: list-traffic
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListTrafficOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List captured proxy traffic metadata (newest first)
+      tags:
+        - traffic
+  /v1/traffic/stream:
+    get:
+      operationId: stream-traffic
+      responses:
+        "200":
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Server-sent events stream of new and updated entries
+      tags:
+        - traffic
+  /v1/traffic/{id}:
+    get:
+      operationId: get-traffic
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrafficEntry"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Fetch a single captured entry by id (full bodies + analysis)
+      tags:
+        - traffic
+  /v1/traffic/{id}/replay:
+    post:
+      operationId: replay-entry
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Re-issue a captured request with optional overrides.
+      tags:
+        - traffic
+  /v1/traffic/{id}/tail:
+    get:
+      operationId: tail-traffic
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            maxLength: 64
+            type: string
+        - description: Byte offset already seen by the client.
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: Byte offset already seen by the client.
+            format: int64
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrafficTailOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Poll appended response bytes for a streaming entry
+      tags:
+        - traffic
