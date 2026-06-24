@@ -103,8 +103,21 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: web
 
-      - name: Build
-        run: task build
+      # Renderer bundle first (Go embeds resources/app).
+      - name: Build renderer
+        run: task build:web
+
+      # On Windows, `energy build` generates the .syso (embeds the app icon +
+      # manifest) before `go build`, so the exe — and the shortcuts pointing at
+      # it — show the ai-fox icon. `task build:go` is a plain `go build` and
+      # would leave the exe icon-less. Non-Windows has no syso step.
+      - name: Build binary (Windows, with embedded icon)
+        if: runner.os == 'Windows'
+        run: energy build -o ai-fox.exe
+
+      - name: Build binary (non-Windows)
+        if: runner.os != 'Windows'
+        run: task build:go
 
       - name: Package
         run: energy package
