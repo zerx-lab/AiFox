@@ -94,6 +94,9 @@ jobs:
         run: |
           git clone --depth 1 --branch v2.5.6 https://github.com/energye/energy.git "$RUNNER_TEMP/energy-src"
           (cd "$RUNNER_TEMP/energy-src/cmd" && go install ./energy)
+          # The default registry energy.yanghy.cn has expired (energye/energy#72);
+          # the maintainer's GitHub Pages mirror serves the same data tree.
+          energy env -w Registry:https://energye.github.io/
           energy install --all
 
       - name: Install renderer deps
