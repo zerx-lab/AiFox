@@ -28,3 +28,5 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+ai-fox.manifest
+ai-fox-windows_amd64.syso
